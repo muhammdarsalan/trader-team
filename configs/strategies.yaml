@@ -1,0 +1,77 @@
+# Strategy roster.
+#
+# Adding a strategy: write the class, register it, add a block here. Nothing
+# else in the codebase changes.
+#
+# Every parameter below is a hypothesis. None of them is known to be
+# profitable, and phase 1-2 deliberately produce no performance claims at all.
+
+default_stop_atr_multiple: 2.0
+default_target_atr_multiple: 3.0
+
+strategies:
+  trend_following:
+    enabled: true
+    timeframes: ["4H", "1D"]
+    min_confidence: 0.55
+    params:
+      fast_ema: 21
+      slow_ema: 50
+      trend_filter_sma: 200      # only trade with the longer-term direction
+      adx_minimum: 22.0          # require some trend strength to be present
+      stop_atr_multiple: 2.0
+      target_atr_multiple: 3.0
+
+  support_resistance:
+    enabled: true
+    timeframes: ["4H", "1D"]
+    min_confidence: 0.55
+    params:
+      proximity_atr: 0.5         # how close to the level counts as "at" it
+      min_level_age: 5           # ignore structure younger than this many bars
+      max_level_age: 120         # and older than this: stale levels stop mattering
+      require_rejection: true    # demand a rejection wick, not just a touch
+      rejection_wick_ratio: 0.5  # wick must be >= this fraction of the bar range
+      stop_atr_multiple: 1.5
+      target_atr_multiple: 3.0
+
+  breakout:
+    enabled: true
+    timeframes: ["4H", "1D"]
+    min_confidence: 0.6
+    params:
+      channel_period: 20
+      buffer_atr: 0.25           # clear the level by this much to filter noise pokes
+      max_consolidation_ratio: 0.9   # require a tightening range beforehand
+      require_volume_confirmation: false  # auto-skipped where volume is unreliable
+      volume_multiple: 1.5
+      stop_atr_multiple: 2.0
+      target_atr_multiple: 4.0
+
+  mean_reversion:
+    enabled: true
+    timeframes: ["1H", "4H", "1D"]
+    min_confidence: 0.55
+    params:
+      bb_period: 20
+      bb_std: 2.0
+      rsi_oversold: 30.0
+      rsi_overbought: 70.0
+      max_adx: 20.0              # do not fade a strong trend
+      min_distance_atr: 1.5      # require a genuine stretch from the mean
+      stop_atr_multiple: 1.5
+      target_atr_multiple: 2.0
+
+  momentum:
+    enabled: true
+    timeframes: ["4H", "1D"]
+    min_confidence: 0.55
+    params:
+      roc_period: 10
+      roc_threshold: 0.02        # 2% over the lookback
+      rsi_period: 14
+      rsi_bull_floor: 50.0       # momentum longs need RSI above the midline
+      rsi_bear_ceiling: 50.0
+      require_macd_agreement: true
+      stop_atr_multiple: 2.0
+      target_atr_multiple: 3.0

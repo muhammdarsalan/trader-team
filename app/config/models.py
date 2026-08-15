@@ -229,6 +229,161 @@ class DataConfig(StrictModel):
         return self.providers.get(key, ProviderConfig())
 
 
+class FeatureConfig(StrictModel):
+    """Indicator periods used by the feature engine.
+
+    These are defaults, not truths. Every one of them is a parameter to be
+    tested for robustness in phase 4 - a strategy that only works at exactly
+    RSI(14) is overfit to a number Wilder picked in 1978.
+    """
+
+    # Trend
+    sma_periods: list[int] = Field(default_factory=lambda: [20, 50, 200])
+    ema_periods: list[int] = Field(default_factory=lambda: [9, 21, 50])
+    slope_period: int = Field(default=5, ge=1)
+    adx_period: int = Field(default=14, ge=2)
+
+    # Momentum
+    rsi_period: int = Field(default=14, ge=2)
+    macd_fast: int = Field(default=12, ge=1)
+    macd_slow: int = Field(default=26, ge=2)
+    macd_signal: int = Field(default=9, ge=1)
+    roc_period: int = Field(default=10, ge=1)
+    momentum_period: int = Field(default=10, ge=1)
+
+    # Volatility
+    atr_period: int = Field(default=14, ge=2)
+    bb_period: int = Field(default=20, ge=2)
+    bb_std: float = Field(default=2.0, gt=0)
+    volatility_lookback: int = Field(
+        default=100, ge=10, description="Window for volatility percentile ranking"
+    )
+
+    # Structure
+    swing_left: int = Field(default=3, ge=1)
+    swing_right: int = Field(
+        default=3, ge=1, description="Also the confirmation delay for swing pivots"
+    )
+    donchian_period: int = Field(default=20, ge=2)
+
+    # Volume
+    volume_period: int = Field(default=20, ge=2)
+    volume_spike_threshold: float = Field(default=2.0, gt=1)
+
+    @model_validator(mode="after")
+    def _macd_periods_ordered(self) -> FeatureConfig:
+        if self.macd_fast >= self.macd_slow:
+            raise ValueError(
+                f"macd_fast ({self.macd_fast}) must be shorter than "
+                f"macd_slow ({self.macd_slow}); otherwise the indicator inverts"
+            )
+        return self
+
+    def warmup_bars(self) -> int:
+        """Bars needed before every feature is defined.
+
+        Below this, some features are NaN. Strategies must not fire on a
+        partially-warm feature set: an indicator computed from three
+        observations is not a shorter version of the real one, it is a
+        different number that will never occur in live trading.
+        """
+        candidates = [
+            *self.sma_periods,
+            *self.ema_periods,
+            self.adx_period * 2,  # ADX smooths DX, which is itself smoothed
+            self.rsi_period * 2,
+            self.macd_slow + self.macd_signal,
+            self.atr_period * 2,
+            self.bb_period,
+            self.volatility_lookback,
+            self.donchian_period + self.swing_right,
+            self.swing_left + self.swing_right + 1,
+            self.volume_period * 3,
+        ]
+        return int(max(candidates))
+
+
+class RegimeConfig(StrictModel):
+    """Thresholds for deterministic market-regime classification.
+
+    Deliberately rule-based and transparent to start with. A machine-learned
+    regime classifier is easy to add later and impossible to debug if it is the
+    only thing you have ever had.
+    """
+
+    # Trend strength, read from ADX.
+    adx_trending: float = Field(default=25.0, gt=0, description="ADX above this = trending")
+    adx_ranging: float = Field(default=20.0, gt=0, description="ADX below this = ranging")
+
+    # Trend direction, read from normalised MA slope (per bar, in ATR units).
+    slope_threshold: float = Field(
+        default=0.05, ge=0, description="Minimum |slope| in ATR/bar to call a direction"
+    )
+
+    # Volatility state, read from ATR percentile in [0, 1].
+    high_volatility_percentile: float = Field(default=0.80, gt=0, lt=1)
+    low_volatility_percentile: float = Field(default=0.20, gt=0, lt=1)
+
+    # Bollinger bandwidth percentile below which a squeeze is declared.
+    squeeze_percentile: float = Field(default=0.20, gt=0, lt=1)
+
+    # Below this confidence the regime is reported as UNCERTAIN. Admitting
+    # ignorance is more useful than a confident wrong label.
+    min_confidence: float = Field(default=0.45, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _thresholds_ordered(self) -> RegimeConfig:
+        if self.adx_ranging > self.adx_trending:
+            raise ValueError(
+                f"adx_ranging ({self.adx_ranging}) must not exceed "
+                f"adx_trending ({self.adx_trending})"
+            )
+        if self.low_volatility_percentile >= self.high_volatility_percentile:
+            raise ValueError(
+                f"low_volatility_percentile ({self.low_volatility_percentile}) must be below "
+                f"high_volatility_percentile ({self.high_volatility_percentile})"
+            )
+        return self
+
+
+class StrategyConfig(StrictModel):
+    """One strategy's activation state and parameters."""
+
+    enabled: bool = True
+    timeframes: list[str] = Field(default_factory=lambda: ["1D"])
+    params: dict[str, Any] = Field(default_factory=dict)
+    # Signals below this confidence are discarded by the strategy itself.
+    min_confidence: float = Field(default=0.5, ge=0, le=1)
+
+    @field_validator("timeframes")
+    @classmethod
+    def _known_timeframes(cls, v: list[str]) -> list[str]:
+        return [normalize_timeframe(tf).code for tf in v]
+
+
+class StrategiesConfig(StrictModel):
+    """The strategy roster.
+
+    Adding a strategy means writing one class, registering it, and adding a
+    block here. No other file changes.
+    """
+
+    strategies: dict[str, StrategyConfig] = Field(default_factory=dict)
+
+    # Risk defaults applied when a strategy does not specify its own.
+    default_stop_atr_multiple: float = Field(default=2.0, gt=0)
+    default_target_atr_multiple: float = Field(default=3.0, gt=0)
+
+    def enabled_names(self) -> list[str]:
+        return sorted(name for name, cfg in self.strategies.items() if cfg.enabled)
+
+    def get(self, name: str) -> StrategyConfig:
+        if name not in self.strategies:
+            known = ", ".join(sorted(self.strategies)) or "<none>"
+            raise KeyError(f"Unknown strategy {name!r}. Configured: {known}")
+        return self.strategies[name]
+
+
 class PlatformConfig(StrictModel):
     """Global runtime settings."""
 

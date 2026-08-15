@@ -88,6 +88,6 @@ def config_dir(tmp_path) -> pathlib.Path:  # noqa: F821
 
     target = tmp_path / "configs"
     target.mkdir()
-    for name in ("assets.yaml", "data.yaml", "platform.yaml"):
-        shutil.copy(CONFIG_DIR / name, target / name)
+    for path in CONFIG_DIR.glob("*.yaml"):
+        shutil.copy(path, target / path.name)
     return pathlib.Path(target)

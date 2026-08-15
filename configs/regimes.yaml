@@ -1,0 +1,29 @@
+# Market-regime classification thresholds.
+#
+# Deliberately deterministic and inspectable. An ML regime classifier is easy
+# to add later and impossible to debug if it is the only one you ever had.
+#
+# The ADX levels below are the conventional 20/25 split. That convention is
+# folklore, not law - treat these as hypotheses to test in phase 4, not as
+# settled facts.
+
+# --- Trend strength (ADX) ---
+adx_trending: 25.0   # above this: a trend is present
+adx_ranging: 20.0    # below this: no trend
+# Between the two is a deliberate no-man's-land where confidence is reduced
+# rather than a direction being forced.
+
+# --- Trend direction (normalised MA slope, in ATR per bar) ---
+# Normalising by ATR is what lets one threshold apply to both gold and EURUSD.
+slope_threshold: 0.05
+
+# --- Volatility state (ATR percentile within its own history) ---
+high_volatility_percentile: 0.80
+low_volatility_percentile: 0.20
+
+# --- Squeeze detection (Bollinger bandwidth percentile) ---
+squeeze_percentile: 0.20
+
+# Below this confidence the regime is reported as UNCERTAIN.
+# Admitting ignorance is more useful than a confident wrong label.
+min_confidence: 0.45

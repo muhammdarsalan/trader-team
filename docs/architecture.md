@@ -131,6 +131,51 @@ All config goes through pydantic models with `extra="forbid"`. A misspelled key
 is a startup error, not a silently ignored setting that produces mysteriously
 wrong results three weeks later.
 
+### Features publish confirmed structure, not detected structure
+
+A swing pivot is defined by bars on both sides of it, so it is not knowable at
+the bar where it occurs. Publishing it there is the most common source of
+look-ahead bias in a trading platform, and it produces backtests that look
+excellent and fail live.
+
+`swing_points()` publishes a pivot `right` bars later, at the moment
+confirmation actually arrives, while preserving the pivot's true price and age.
+
+### Causality is enforced by test, not by review
+
+`tests/helpers.py::assert_causal` computes a feature on the first *n* bars,
+computes it again on the full series, and compares the overlap. Any difference
+proves the full computation consumed future data.
+
+Reading code cannot establish this reliably; a shifted window or a
+`rolling(center=True)` is easy to miss and catastrophic. Every indicator, every
+structure feature, the whole feature engine, the regime detector and all five
+strategies are covered.
+
+### A breakout is a transition, not a state
+
+`breakout_up` is true whenever price is beyond the channel — which, in a
+sustained trend, is every bar for hundreds of bars. Consumers deciding "is this
+a breakout right now" use `breakout_up_fresh`, which additionally requires the
+channel to have been intact just before.
+
+This was found by a test asserting a clean linear uptrend classifies as
+`TRENDING_UP`; without freshness the detector reported `BREAKOUT` permanently
+and never once identified the trend.
+
+### Strategies decline rather than raise
+
+`generate_signal()` returns `WAIT` with a recorded reason when preconditions
+fail — short history, unsupported timeframe, warm-up, missing indicators. One
+strategy being misconfigured must not interrupt the other four, and phase 3's
+graph will mark a genuinely failing strategy `UNAVAILABLE` and continue.
+
+### Confidence is not a probability
+
+A strategy's confidence measures how well *its own conditions* were met. It is
+not calibrated against outcomes and nothing treats it as a win probability.
+Conflating the two would make the ensemble weighting in phase 3 meaningless.
+
 ### LIVE mode cannot be selected
 
 `TradingMode.LIVE` exists solely so the validator can reject it with an

@@ -11,7 +11,14 @@ from typing import Any, TypeVar
 import yaml
 from pydantic import ValidationError
 
-from app.config.models import AssetUniverse, DataConfig, PlatformConfig
+from app.config.models import (
+    AssetUniverse,
+    DataConfig,
+    FeatureConfig,
+    PlatformConfig,
+    RegimeConfig,
+    StrategiesConfig,
+)
 from app.utils.paths import CONFIG_DIR
 
 T = TypeVar("T")
@@ -63,6 +70,24 @@ def load_data_config(config_dir: Path | None = None) -> DataConfig:
     return _build(DataConfig, _read_yaml(path), path)
 
 
+def load_feature_config(config_dir: Path | None = None) -> FeatureConfig:
+    """Load ``configs/features.yaml``."""
+    path = _config_path("features.yaml", config_dir)
+    return _build(FeatureConfig, _read_yaml(path), path)
+
+
+def load_regime_config(config_dir: Path | None = None) -> RegimeConfig:
+    """Load ``configs/regimes.yaml``."""
+    path = _config_path("regimes.yaml", config_dir)
+    return _build(RegimeConfig, _read_yaml(path), path)
+
+
+def load_strategies_config(config_dir: Path | None = None) -> StrategiesConfig:
+    """Load ``configs/strategies.yaml``."""
+    path = _config_path("strategies.yaml", config_dir)
+    return _build(StrategiesConfig, _read_yaml(path), path)
+
+
 # Environment variables that override platform.yaml, so that a run can be
 # reconfigured without editing tracked files.
 _ENV_OVERRIDES: dict[str, str] = {
@@ -111,6 +136,9 @@ class AppConfig:
     platform: PlatformConfig
     data: DataConfig
     assets: AssetUniverse
+    features: FeatureConfig
+    regimes: RegimeConfig
+    strategies: StrategiesConfig
 
 
 @lru_cache(maxsize=8)
@@ -120,6 +148,9 @@ def _cached_config(config_dir: str | None) -> AppConfig:
         platform=load_platform_config(directory),
         data=load_data_config(directory),
         assets=load_assets(directory),
+        features=load_feature_config(directory),
+        regimes=load_regime_config(directory),
+        strategies=load_strategies_config(directory),
     )
 
 

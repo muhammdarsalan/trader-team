@@ -31,18 +31,23 @@ It exists to answer one question scientifically:
 
 ## Status
 
-**Phase 1 of 5 complete** — configuration, market data, quality engine.
+**Phases 1–2 of 5 complete** — data, features, regimes, strategies.
 
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Config, data layer, quality engine, ingest | ✅ Complete |
-| 2 | Features, regime detection, 5 strategies, signals | ⬜ Not started |
+| 2 | Features, regime detection, 5 strategies, signals | ✅ Complete |
 | 3 | LangGraph workflow, selector, risk, execution, backtester | ⬜ Not started |
 | 4 | Walk-forward, OOS, Monte Carlo, robustness, experiment DB | ⬜ Not started |
 | 5 | Paper trading, Streamlit dashboard, docs | ⬜ Not started |
 
 What works today: download and validate 26 years of daily OHLCV across six
-instruments, with a quality gate that refuses to hand corrupt data to a strategy.
+instruments; compute a causal feature panel; classify market regimes; and run
+five independent strategies that emit standardized, self-validating signals.
+
+**No performance claims exist yet, by design.** Nothing has been backtested —
+that is phase 3. Every strategy parameter is a hypothesis awaiting the
+validation machinery of phase 4.
 
 ---
 
@@ -78,6 +83,9 @@ python scripts/ingest_data.py --symbol XAUUSD --timeframe 1D --start 2012-01-01
 # Whole configured universe, saving quality reports
 python scripts/ingest_data.py --all --timeframe 1D --start 2012-01-01 --save-report
 
+# Analyse a market: regime + what every strategy decided, and why
+python scripts/analyze_market.py --symbol XAUUSD --timeframe 1D --history 250
+
 # Run the tests
 pytest -m "not network"
 ```
@@ -103,12 +111,12 @@ configs/*.yaml  ─→  app/config/     typed, validated settings
                          ↓
 app/data/       provider → cache → cleaning → quality gate → resampling
                          ↓
-app/features/   indicators and derived features            [phase 2]
-app/regimes/    market-state classification                [phase 2]
-app/strategies/ independent strategy modules               [phase 2]
+app/features/   causal indicators, structure, volume
+app/regimes/    rule-based market-state classification
+app/signals/    the standardized Signal contract
+app/strategies/ five independent strategies + registry
                          ↓
 app/graph/      LangGraph DAG: state, nodes, routing       [phase 3]
-app/signals/    aggregation and strategy selection         [phase 3]
 app/risk/       position sizing and exposure limits        [phase 3]
 app/execution/  realistic fill simulation                  [phase 3]
 app/backtest/   event-driven engine and metrics            [phase 3]
@@ -129,6 +137,9 @@ Design rules the codebase holds to:
   yet known. This convention is what keeps look-ahead bias out.
 - **Providers are swappable.** Strategy code never sees a vendor ticker.
 - **Errors are isolated.** One failing component must not take down a run.
+- **Features are causal, and it is enforced by test.** `assert_causal` recomputes
+  every feature on a truncated series and compares; any difference means the
+  full computation used future data. See [docs/features.md](docs/features.md).
 
 ---
 
@@ -139,6 +150,9 @@ Design rules the codebase holds to:
 | `configs/platform.yaml` | Mode, kill switch, balance, base currency, seed |
 | `configs/assets.yaml` | Instrument universe, tick sizes, spreads, vendor tickers |
 | `configs/data.yaml` | Providers, cache, quality thresholds |
+| `configs/features.yaml` | Indicator periods |
+| `configs/regimes.yaml` | Regime classification thresholds |
+| `configs/strategies.yaml` | Which strategies run, and their parameters |
 
 Environment overrides: `TRADING_MODE`, `TRADING_ENABLED`, `GTP_LOG_LEVEL`,
 `GTP_RANDOM_SEED`, `GTP_STARTING_BALANCE`, `GTP_BASE_CURRENCY`.
@@ -178,9 +192,20 @@ pytest -m network          # the one live-endpoint test
 pytest --cov=app           # with coverage
 ```
 
-215 offline tests plus one live-endpoint test, covering schema contracts, config
+441 offline tests plus one live-endpoint test, covering schema contracts, config
 validation, cleaning, resampling, the quality engine, cache integrity, all three
-providers and the service facade.
+providers, the service facade, every indicator, market structure, the feature
+engine, regime detection, the Signal contract and all five strategies.
+
+Two families of test carry unusual weight:
+
+- **Causality.** `assert_causal` recomputes a feature on a truncated series and
+  compares the overlap; any difference proves future data was used. It covers
+  every indicator, the feature engine end-to-end, the regime detector and the
+  signals themselves.
+- **Strategies must be able to fire.** A strategy that always returns `WAIT`
+  satisfies every safety property while being useless, so each one is asserted
+  to produce a signal under the conditions it targets.
 
 ---
 
@@ -214,6 +239,8 @@ experiments/    experiment records  (gitignored)
 ## Documentation
 
 - [docs/data.md](docs/data.md) — sources, provenance, schema, quality, limitations
+- [docs/features.md](docs/features.md) — indicators, market structure, causality guarantees
+- [docs/strategies.md](docs/strategies.md) — the five strategies, regimes, the Signal contract
 - [docs/architecture.md](docs/architecture.md) — design decisions and rationale
 
 ---

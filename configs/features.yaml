@@ -1,0 +1,38 @@
+# Indicator periods used by the feature engine.
+#
+# These are conventional defaults, not truths. Every value here is a parameter
+# to be tested for robustness in phase 4. A strategy that works only at exactly
+# RSI(14) is overfit to a number Wilder chose in 1978.
+
+# --- Trend ---
+sma_periods: [20, 50, 200]
+ema_periods: [9, 21, 50]
+slope_period: 5
+adx_period: 14
+
+# --- Momentum ---
+rsi_period: 14
+macd_fast: 12
+macd_slow: 26
+macd_signal: 9
+roc_period: 10
+momentum_period: 10
+
+# --- Volatility ---
+atr_period: 14
+bb_period: 20
+bb_std: 2.0
+# Window for ranking current volatility against its own history. Percentiles
+# travel across instruments; raw ATR values do not.
+volatility_lookback: 100
+
+# --- Market structure ---
+# swing_right is also the confirmation delay: a pivot is only published this
+# many bars after it occurred, because that is when it becomes knowable.
+swing_left: 3
+swing_right: 3
+donchian_period: 20
+
+# --- Volume (suppressed automatically where has_reliable_volume is false) ---
+volume_period: 20
+volume_spike_threshold: 2.0
