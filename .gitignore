@@ -1,0 +1,61 @@
+# --- Secrets: never commit ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+kaggle.json
+credentials.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Testing / tooling caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# --- Data: downloaded / generated, never committed ---
+data/raw/
+data/cache/
+data/external/
+data/processed/
+*.parquet
+*.feather
+*.db
+*.sqlite
+*.sqlite3
+
+# ...but keep the directory structure and provenance manifests
+!data/**/.gitkeep
+!data/**/*.manifest.json
+
+# --- Generated artefacts ---
+reports/*
+!reports/.gitkeep
+experiments/*
+!experiments/.gitkeep
+logs/
+*.log
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

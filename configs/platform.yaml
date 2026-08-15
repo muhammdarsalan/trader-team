@@ -1,0 +1,25 @@
+# Global runtime settings.
+#
+# Any value here can be overridden by an environment variable (see .env.example):
+#   TRADING_MODE, TRADING_ENABLED, GTP_LOG_LEVEL, GTP_RANDOM_SEED,
+#   GTP_STARTING_BALANCE, GTP_BASE_CURRENCY
+
+# BACKTEST | PAPER | RESEARCH | ANALYSIS
+# LIVE is rejected by the config validator. Real-money execution is not
+# implemented and is out of scope for this platform.
+mode: RESEARCH
+
+# Global kill switch. While false, no order is placed in any mode - the graph
+# still runs and still analyses, but execution is blocked and the block is
+# logged. Flip to true only when you intend paper orders to be filled.
+trading_enabled: false
+
+base_currency: USD
+starting_balance: 10000.0
+
+# Fixed seed so that every stochastic component (Monte Carlo, ML splits,
+# bootstrap) is reproducible from the experiment record alone.
+random_seed: 42
+
+log_level: INFO
+log_to_file: true

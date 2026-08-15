@@ -1,0 +1,57 @@
+# Market-data subsystem configuration.
+
+default_provider: yahoo
+
+providers:
+  yahoo:
+    enabled: true
+    timeout_seconds: 30
+    max_retries: 3
+    retry_backoff_seconds: 1.5
+    rate_limit_seconds: 0.5
+    options:
+      # Yahoo's public chart endpoint caps intraday history. These are the
+      # vendor's limits, not ours; the loader refuses out-of-range requests
+      # rather than silently returning a truncated series.
+      max_days_1m: 7
+      max_days_intraday: 730
+
+  csv:
+    enabled: true
+    timeout_seconds: 30
+    max_retries: 0
+    options:
+      # Where hand-dropped vendor files live, relative to data/raw/.
+      # Expected filename: <SYMBOL>_<TIMEFRAME>.csv, e.g. XAUUSD_1D.csv
+      directory: "."
+
+cache_enabled: true
+cache_format: parquet
+cache_max_age_hours: 24
+
+# Strategies never see data that failed validation.
+fail_on_quality_fail: true
+warn_on_quality_warning: true
+
+quality:
+  # Fractions of total rows.
+  max_missing_ratio_warn: 0.01
+  max_missing_ratio_fail: 0.10
+  max_duplicate_ratio_warn: 0.0
+  max_duplicate_ratio_fail: 0.01
+  max_invalid_ohlc_ratio_warn: 0.0
+  max_invalid_ohlc_ratio_fail: 0.001
+
+  # Bad-print detection: bar returns beyond this many robust sigmas are flagged.
+  price_jump_sigma: 12.0
+  max_price_jump_ratio_warn: 0.001
+  max_price_jump_ratio_fail: 0.01
+
+  # Gaps beyond this multiple of the bar interval are reported, after weekend
+  # and holiday gaps have been excluded.
+  gap_tolerance_multiple: 3.0
+
+  min_rows_warn: 250
+  min_rows_fail: 30
+
+supported_timeframes: ["1M", "5M", "15M", "30M", "1H", "4H", "1D"]

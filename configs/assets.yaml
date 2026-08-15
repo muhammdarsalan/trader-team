@@ -1,0 +1,118 @@
+# Instrument universe.
+#
+# Nothing in the code hard-codes a symbol. Add an instrument here and the data
+# layer, strategies, risk engine and backtester pick it up automatically.
+#
+# provider_symbols maps the canonical platform symbol to each vendor's ticker,
+# so vendor naming never leaks into strategy code.
+#
+# has_reliable_volume MUST be false for OTC/spot instruments where the feed's
+# "volume" is a broker tick count. Volume features are suppressed rather than
+# computed on a meaningless series.
+
+assets:
+  XAUUSD:
+    name: Gold / US Dollar
+    asset_class: METAL
+    quote_currency: USD
+    base_currency: XAU
+    provider_symbols:
+      # NOTE: Yahoo does not publish a spot XAUUSD series. GC=F is COMEX
+      # front-month gold futures, used here as the spot proxy. Its volume is
+      # genuine exchange volume. See docs/data.md for the tracking-error
+      # caveats (contract roll, basis, exchange hours vs 24h spot).
+      # Swap in a true spot CSV via the `csv` provider and set
+      # has_reliable_volume: false when you do.
+      yahoo: "GC=F"
+    tick_size: 0.01
+    contract_size: 1.0
+    typical_spread: 0.30
+    commission_per_unit: 0.0
+    venue_timezone: America/New_York
+    has_reliable_volume: true
+    trading_days: WEEKDAYS
+    default_timeframe: 1D
+    enabled: true
+
+  EURUSD:
+    name: Euro / US Dollar
+    asset_class: FX
+    quote_currency: USD
+    base_currency: EUR
+    provider_symbols:
+      yahoo: "EURUSD=X"
+    tick_size: 0.00001
+    contract_size: 100000.0
+    typical_spread: 0.00010
+    commission_per_unit: 0.0
+    venue_timezone: UTC
+    has_reliable_volume: false   # OTC spot FX: no consolidated volume exists
+    trading_days: WEEKDAYS
+    default_timeframe: 1D
+    enabled: true
+
+  GBPUSD:
+    name: British Pound / US Dollar
+    asset_class: FX
+    quote_currency: USD
+    base_currency: GBP
+    provider_symbols:
+      yahoo: "GBPUSD=X"
+    tick_size: 0.00001
+    contract_size: 100000.0
+    typical_spread: 0.00015
+    commission_per_unit: 0.0
+    venue_timezone: UTC
+    has_reliable_volume: false
+    trading_days: WEEKDAYS
+    default_timeframe: 1D
+    enabled: true
+
+  USDJPY:
+    name: US Dollar / Japanese Yen
+    asset_class: FX
+    quote_currency: JPY
+    base_currency: USD
+    provider_symbols:
+      yahoo: "JPY=X"
+    tick_size: 0.001
+    contract_size: 100000.0
+    typical_spread: 0.010
+    commission_per_unit: 0.0
+    venue_timezone: UTC
+    has_reliable_volume: false
+    trading_days: WEEKDAYS
+    default_timeframe: 1D
+    enabled: true
+
+  US30:
+    name: Dow Jones Industrial Average
+    asset_class: INDEX
+    quote_currency: USD
+    provider_symbols:
+      yahoo: "^DJI"
+    tick_size: 1.0
+    contract_size: 1.0
+    typical_spread: 2.0
+    commission_per_unit: 0.0
+    venue_timezone: America/New_York
+    has_reliable_volume: true
+    trading_days: WEEKDAYS
+    default_timeframe: 1D
+    enabled: true
+
+  NASDAQ:
+    name: Nasdaq Composite Index
+    asset_class: INDEX
+    quote_currency: USD
+    provider_symbols:
+      yahoo: "^IXIC"
+    tick_size: 0.25
+    contract_size: 1.0
+    typical_spread: 1.0
+    commission_per_unit: 0.0
+    venue_timezone: America/New_York
+    has_reliable_volume: true
+    trading_days: WEEKDAYS
+    default_timeframe: 1D
+    enabled: true

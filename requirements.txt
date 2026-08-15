@@ -1,0 +1,34 @@
+# Core runtime dependencies.
+# Everything here is free / open-source. No paid APIs, no cloud services.
+
+# --- Core data stack ---
+pandas>=2.2
+numpy>=1.26
+pyarrow>=15.0          # parquet cache backend
+
+# --- Configuration & typed models ---
+pydantic>=2.6
+PyYAML>=6.0
+python-dotenv>=1.0
+
+# --- HTTP (market data download) ---
+requests>=2.31
+
+# --- Graph engine (phase 3) ---
+langgraph>=0.2
+networkx>=3.2          # graph analysis / visualisation
+
+# --- Machine learning (phase 4, optional at runtime) ---
+scikit-learn>=1.4
+
+# --- Visualisation & dashboard (phase 5) ---
+streamlit>=1.31
+plotly>=5.18
+matplotlib>=3.8
+
+# --- Development / quality ---
+pytest>=8.0
+pytest-cov>=4.1
+ruff>=0.3
+black>=24.0
+mypy>=1.9
