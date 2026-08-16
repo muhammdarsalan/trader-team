@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from app.config.models import AssetConfig, RiskConfig
+from app.data.validators.quality import QualityStatus
 from app.portfolio.portfolio import Portfolio
 from app.risk.engine import RiskEngine, rolling_correlations
 from app.risk.models import RiskBlockReason, RiskVerdict
@@ -75,6 +76,17 @@ def unleveraged(**overrides) -> RiskConfig:
     )
 
 
+def risk_engine(config: RiskConfig | None = None, **kwargs) -> RiskEngine:
+    """A risk engine that has been told its data passed the quality gate.
+
+    The engine refuses to size anything against a series whose grade it was
+    never given, so a test aimed at some *other* limit has to state the grade
+    or it only ever measures the quality gate. The gate's own tests below
+    construct :class:`RiskEngine` directly.
+    """
+    return RiskEngine(config, data_quality=QualityStatus.PASS, **kwargs)
+
+
 @pytest.fixture
 def portfolio() -> Portfolio:
     return Portfolio(10_000.0)
@@ -82,7 +94,7 @@ def portfolio() -> Portfolio:
 
 @pytest.fixture
 def engine() -> RiskEngine:
-    return RiskEngine(unleveraged(), trading_enabled=True)
+    return risk_engine(unleveraged(), trading_enabled=True)
 
 
 # ----------------------------------------------------------- core arithmetic
@@ -121,7 +133,7 @@ def test_short_signals_size_identically(engine, portfolio):
 
 
 def test_fixed_risk_sizing():
-    engine = RiskEngine(
+    engine = risk_engine(
         unleveraged(sizing_method="fixed_risk", fixed_risk_amount=250.0), trading_enabled=True
     )
     decision = engine.evaluate(
@@ -142,7 +154,7 @@ def test_decision_records_the_arithmetic(engine, portfolio):
 
 def test_kill_switch_blocks_everything(portfolio):
     """The graph still analyses; nothing is opened."""
-    engine = RiskEngine(RiskConfig(), trading_enabled=False)
+    engine = risk_engine(RiskConfig(), trading_enabled=False)
     decision = engine.evaluate(signal(), portfolio, equity=10_000.0)
 
     assert not decision.approved
@@ -170,7 +182,7 @@ def test_zero_equity_is_rejected(engine, portfolio):
 # --------------------------------------------------------------- position caps
 
 def test_max_concurrent_positions(portfolio):
-    engine = RiskEngine(unleveraged(max_concurrent_positions=2), trading_enabled=True)
+    engine = risk_engine(unleveraged(max_concurrent_positions=2), trading_enabled=True)
     open_position(portfolio, "EURUSD")
     open_position(portfolio, "GBPUSD")
 
@@ -179,7 +191,7 @@ def test_max_concurrent_positions(portfolio):
 
 
 def test_max_positions_per_symbol(portfolio):
-    engine = RiskEngine(unleveraged(max_positions_per_symbol=1), trading_enabled=True)
+    engine = risk_engine(unleveraged(max_positions_per_symbol=1), trading_enabled=True)
     open_position(portfolio, "XAUUSD")
 
     decision = engine.evaluate(signal(symbol="XAUUSD"), portfolio, equity=10_000.0)
@@ -188,7 +200,7 @@ def test_max_positions_per_symbol(portfolio):
 
 def test_per_position_notional_cap(portfolio):
     """A very tight stop would otherwise imply an enormous position."""
-    engine = RiskEngine(RiskConfig(max_position_notional_pct=0.2), trading_enabled=True)
+    engine = risk_engine(RiskConfig(max_position_notional_pct=0.2), trading_enabled=True)
     decision = engine.evaluate(
         signal(entry=100.0, stop=99.99), portfolio, equity=10_000.0, asset=asset()
     )
@@ -205,7 +217,7 @@ def test_notional_cap_binds_on_high_priced_instruments(portfolio):
     leverage. The notional cap is what prevents risk-based sizing from
     quietly implying it.
     """
-    engine = RiskEngine(RiskConfig(max_position_notional_pct=0.5), trading_enabled=True)
+    engine = risk_engine(RiskConfig(max_position_notional_pct=0.5), trading_enabled=True)
     decision = engine.evaluate(
         signal(entry=3000.0, stop=2990.0), portfolio, equity=10_000.0, asset=asset()
     )
@@ -219,7 +231,7 @@ def test_notional_cap_binds_on_high_priced_instruments(portfolio):
 # ---------------------------------------------------------------- risk budgets
 
 def test_portfolio_risk_budget_trims_the_position(portfolio):
-    engine = RiskEngine(
+    engine = risk_engine(
         unleveraged(max_portfolio_risk=0.015, risk_per_trade=0.01), trading_enabled=True
     )
     open_position(portfolio, "EURUSD", risk=100.0)
@@ -230,7 +242,7 @@ def test_portfolio_risk_budget_trims_the_position(portfolio):
 
 
 def test_exhausted_portfolio_budget_blocks(portfolio):
-    engine = RiskEngine(unleveraged(max_portfolio_risk=0.01), trading_enabled=True)
+    engine = risk_engine(unleveraged(max_portfolio_risk=0.01), trading_enabled=True)
     open_position(portfolio, "EURUSD", risk=100.0)
 
     decision = engine.evaluate(signal(), portfolio, equity=10_000.0)
@@ -238,7 +250,7 @@ def test_exhausted_portfolio_budget_blocks(portfolio):
 
 
 def test_per_strategy_budget_is_enforced(portfolio):
-    engine = RiskEngine(
+    engine = risk_engine(
         unleveraged(max_risk_per_strategy=0.01, max_portfolio_risk=0.10), trading_enabled=True
     )
     open_position(portfolio, "EURUSD", risk=100.0, strategy="trend_following")
@@ -250,7 +262,7 @@ def test_per_strategy_budget_is_enforced(portfolio):
 
 
 def test_a_different_strategy_has_its_own_budget(portfolio):
-    engine = RiskEngine(
+    engine = risk_engine(
         unleveraged(max_risk_per_strategy=0.01, max_portfolio_risk=0.10), trading_enabled=True
     )
     open_position(portfolio, "EURUSD", risk=100.0, strategy="trend_following")
@@ -262,7 +274,7 @@ def test_a_different_strategy_has_its_own_budget(portfolio):
 # -------------------------------------------------------------- drawdown rules
 
 def test_drawdown_reduces_position_size(portfolio):
-    engine = RiskEngine(
+    engine = risk_engine(
         unleveraged(drawdown_reduce_threshold=0.10, drawdown_reduce_factor=0.5),
         trading_enabled=True,
     )
@@ -277,7 +289,7 @@ def test_drawdown_reduces_position_size(portfolio):
 
 
 def test_max_drawdown_halts_new_trades(portfolio):
-    engine = RiskEngine(unleveraged(max_drawdown_limit=0.20), trading_enabled=True)
+    engine = risk_engine(unleveraged(max_drawdown_limit=0.20), trading_enabled=True)
     portfolio._peak_equity = 10_000.0
     portfolio._day_start_equity = 7_500.0
 
@@ -286,7 +298,7 @@ def test_max_drawdown_halts_new_trades(portfolio):
 
 
 def test_daily_loss_limit_halts_trading(portfolio):
-    engine = RiskEngine(unleveraged(daily_loss_limit=0.03), trading_enabled=True)
+    engine = risk_engine(unleveraged(daily_loss_limit=0.03), trading_enabled=True)
     portfolio._day_start_equity = 10_000.0
 
     decision = engine.evaluate(signal(), portfolio, equity=9_600.0)  # 4% down today
@@ -302,7 +314,7 @@ def test_drawdown_thresholds_must_be_ordered():
 
 def test_correlated_positions_share_one_budget(portfolio):
     """Three correlated longs are one bet, and sizing them separately triples it."""
-    engine = RiskEngine(
+    engine = risk_engine(
         unleveraged(max_correlated_risk=0.015, correlation_threshold=0.7),
         trading_enabled=True,
     )
@@ -319,7 +331,7 @@ def test_correlated_positions_share_one_budget(portfolio):
 
 
 def test_uncorrelated_positions_do_not_share_a_budget(portfolio):
-    engine = RiskEngine(unleveraged(max_correlated_risk=0.015), trading_enabled=True)
+    engine = risk_engine(unleveraged(max_correlated_risk=0.015), trading_enabled=True)
     open_position(portfolio, "EURUSD", risk=100.0)
 
     correlations = pd.DataFrame(
@@ -333,7 +345,7 @@ def test_uncorrelated_positions_do_not_share_a_budget(portfolio):
 
 def test_opposite_positions_in_negatively_correlated_symbols_are_concentration(portfolio):
     """Short EURUSD and long USDCHF is one dollar trade wearing two hats."""
-    engine = RiskEngine(
+    engine = risk_engine(
         unleveraged(max_correlated_risk=0.015, correlation_threshold=0.7),
         trading_enabled=True,
     )
@@ -385,3 +397,74 @@ def test_rejection_describes_itself(engine, portfolio):
     engine.trading_enabled = False
     text = engine.evaluate(signal(), portfolio, equity=10_000.0).describe()
     assert "REJECTED" in text and "KILL_SWITCH" in text
+
+
+# --------------------------------------------------------------- data quality
+
+def test_unstated_data_quality_is_refused(portfolio):
+    """'Nobody checked' must not size the same position as 'checked and passed'."""
+    engine = RiskEngine(unleveraged(), trading_enabled=True)
+    decision = engine.evaluate(signal(), portfolio, equity=10_000.0)
+
+    assert not decision.approved
+    assert decision.block_reason is RiskBlockReason.DATA_QUALITY_UNKNOWN
+    assert decision.quantity == 0.0
+
+
+def test_the_unknown_placeholder_is_not_a_pass(portfolio):
+    """The literal string several call sites use as a placeholder is not a grade."""
+    engine = RiskEngine(unleveraged(), trading_enabled=True, data_quality="UNKNOWN")
+    decision = engine.evaluate(signal(), portfolio, equity=10_000.0)
+
+    assert decision.block_reason is RiskBlockReason.DATA_QUALITY_UNKNOWN
+
+
+def test_failed_data_quality_blocks_sizing(portfolio):
+    engine = RiskEngine(unleveraged(), trading_enabled=True, data_quality=QualityStatus.FAIL)
+    decision = engine.evaluate(signal(), portfolio, equity=10_000.0)
+
+    assert not decision.approved
+    assert decision.block_reason is RiskBlockReason.DATA_QUALITY
+
+
+def test_warning_data_passes_by_default_and_is_recorded(portfolio):
+    """Most long historical windows carry a warning; blocking them all is useless."""
+    engine = RiskEngine(unleveraged(), trading_enabled=True, data_quality=QualityStatus.WARNING)
+    decision = engine.evaluate(signal(), portfolio, equity=10_000.0)
+
+    assert decision.approved
+    assert decision.metrics["data_quality"] == "WARNING"
+
+
+def test_warning_data_can_be_configured_to_block(portfolio):
+    engine = RiskEngine(
+        unleveraged(block_on_data_quality_warning=True),
+        trading_enabled=True,
+        data_quality=QualityStatus.WARNING,
+    )
+    decision = engine.evaluate(signal(), portfolio, equity=10_000.0)
+
+    assert not decision.approved
+    assert decision.block_reason is RiskBlockReason.DATA_QUALITY
+
+
+def test_unknown_quality_can_be_accepted_deliberately(portfolio):
+    """Turning the check off is allowed; doing it by accident is what is not."""
+    engine = RiskEngine(unleveraged(require_known_data_quality=False), trading_enabled=True)
+    assert engine.evaluate(signal(), portfolio, equity=10_000.0).approved
+
+
+def test_per_call_quality_overrides_the_engine_default(portfolio):
+    engine = RiskEngine(unleveraged(), trading_enabled=True, data_quality=QualityStatus.PASS)
+    decision = engine.evaluate(
+        signal(), portfolio, equity=10_000.0, data_quality=QualityStatus.FAIL
+    )
+
+    assert not decision.approved
+    assert decision.block_reason is RiskBlockReason.DATA_QUALITY
+
+
+def test_a_failed_grade_cannot_be_talked_past_by_the_kill_switch(portfolio):
+    """Both gates block; the point is that neither depends on the other."""
+    engine = RiskEngine(unleveraged(), trading_enabled=False, data_quality=QualityStatus.FAIL)
+    assert not engine.evaluate(signal(), portfolio, equity=10_000.0).approved

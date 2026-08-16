@@ -46,3 +46,20 @@ drawdown_reduce_threshold: 0.10   # above this, halve position size
 drawdown_reduce_factor: 0.5
 max_drawdown_limit: 0.20          # above this, no new positions
 daily_loss_limit: 0.03            # loss in one day that halts new trades
+
+# --- Data quality ---
+# Position sizing is arithmetic on the price series: equity, stop distance and
+# ATR all descend from it. So the grade the quality gate gave that series has
+# to reach the sizing decision rather than stopping at the report header.
+#
+# An unstated grade is a refusal, not a pass. "Nobody checked" and "checked and
+# passed" must not produce the same position size, and the only way to keep
+# that true is to make silence expensive.
+block_on_data_quality_fail: true
+require_known_data_quality: true
+
+# WARNING-grade data still trades by default: nearly every long historical
+# window carries at least one warning (a stale final bar, a holiday gap), and
+# blocking all of them would block all research. Turn this on for paper
+# trading, where a stale or gappy feed is a live hazard rather than a footnote.
+block_on_data_quality_warning: false

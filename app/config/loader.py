@@ -19,6 +19,7 @@ from app.config.models import (
     FeatureConfig,
     PlatformConfig,
     RegimeConfig,
+    ResearchConfig,
     RiskConfig,
     StrategiesConfig,
 )
@@ -109,6 +110,19 @@ def load_backtest_config(config_dir: Path | None = None) -> BacktestConfig:
     return _build(BacktestConfig, _read_yaml(path), path)
 
 
+def load_research_config(config_dir: Path | None = None) -> ResearchConfig:
+    """Load ``configs/research.yaml``.
+
+    Missing entirely is not an error: a platform with no research settings runs
+    the defaults, which are the strict ones. Loosened settings have to be
+    written down deliberately.
+    """
+    path = _config_path("research.yaml", config_dir)
+    if not path.exists():
+        return ResearchConfig()
+    return _build(ResearchConfig, _read_yaml(path), path)
+
+
 # Environment variables that override platform.yaml, so that a run can be
 # reconfigured without editing tracked files.
 _ENV_OVERRIDES: dict[str, str] = {
@@ -163,6 +177,28 @@ class AppConfig:
     risk: RiskConfig
     execution: ExecutionConfig
     backtest: BacktestConfig
+    research: ResearchConfig
+
+
+def override_config(config: AppConfig, **sections: Any) -> AppConfig:
+    """A copy of ``config`` with whole sections replaced.
+
+    Research runs need many configurations that differ from the shipped one in
+    a single field, and every configuration object is frozen so that a run
+    cannot mutate the settings it is being measured against. This builds the
+    variant explicitly instead of each caller reconstructing the dataclass by
+    hand.
+
+        override_config(cfg, backtest=cfg.backtest.model_copy(update={"max_bars": 300}))
+    """
+    unknown = set(sections) - set(AppConfig.__dataclass_fields__)
+    if unknown:
+        raise ConfigError(
+            f"Unknown configuration section(s): {sorted(unknown)}. "
+            f"Valid sections: {sorted(AppConfig.__dataclass_fields__)}"
+        )
+    current = {name: getattr(config, name) for name in AppConfig.__dataclass_fields__}
+    return AppConfig(**{**current, **sections})
 
 
 @lru_cache(maxsize=8)
@@ -178,6 +214,7 @@ def _cached_config(config_dir: str | None) -> AppConfig:
         risk=load_risk_config(directory),
         execution=load_execution_config(directory),
         backtest=load_backtest_config(directory),
+        research=load_research_config(directory),
     )
 
 

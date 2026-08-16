@@ -137,6 +137,13 @@ class StrategySelector:
             meta = strategy.metadata
             reasoning: list[str] = []
 
+            # A configured standing weight, before any of the selector's own
+            # judgement. Normally 1.0; a research variant sets it to test
+            # whether tilting away from a redundant strategy helps.
+            base = float(getattr(strategy.config, "weight", 1.0))
+            if base != 1.0:
+                reasoning.append(f"Configured standing weight {base:g}")
+
             regime_factor = self.NEUTRAL_FACTOR
             if regime.regime in meta.preferred_regimes:
                 regime_factor = self.PREFERRED_FACTOR
@@ -159,11 +166,11 @@ class StrategySelector:
             )
             reasoning.append(performance_note)
 
-            raw = regime_factor * performance_factor
+            raw = base * regime_factor * performance_factor
             weights[strategy.name] = StrategyWeight(
                 strategy=strategy.name,
                 weight=raw,
-                base_weight=1.0,
+                base_weight=base,
                 regime_factor=regime_factor,
                 performance_factor=performance_factor,
                 reasoning=tuple(reasoning),

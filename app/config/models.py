@@ -354,6 +354,11 @@ class StrategyConfig(StrictModel):
     params: dict[str, Any] = Field(default_factory=dict)
     # Signals below this confidence are discarded by the strategy itself.
     min_confidence: float = Field(default=0.5, ge=0, le=1)
+    # Standing weight, before the selector applies regime fit and measured
+    # performance. 1.0 means "no opinion". This exists so that the question
+    # "does down-weighting a redundant strategy help?" can be answered by
+    # running an experiment rather than by deleting the strategy and hoping.
+    weight: float = Field(default=1.0, ge=0)
 
     @field_validator("timeframes")
     @classmethod
@@ -439,6 +444,28 @@ class RiskConfig(StrictModel):
         default=0.03, gt=0, lt=1, description="Loss in one day that halts new trades"
     )
 
+    # --- data quality ---
+    # A limit computed from corrupt inputs is not a limit. Every number the risk
+    # engine works with - equity, stop distance, ATR - descends from the price
+    # series, so the grade that series was given has to reach the sizing
+    # decision rather than stopping at the report header.
+    block_on_data_quality_fail: bool = Field(
+        default=True,
+        description="Refuse to size a position on data the quality gate graded FAIL",
+    )
+    block_on_data_quality_warning: bool = Field(
+        default=False,
+        description="Also refuse on WARNING-grade data. Off by default because most "
+                    "long historical windows carry at least one warning; turn it on for "
+                    "paper trading, where a stale or gappy feed is a live hazard.",
+    )
+    require_known_data_quality: bool = Field(
+        default=True,
+        description="Treat an unstated data grade as a refusal rather than as consent. "
+                    "'Nobody checked' and 'it was checked and passed' must not produce "
+                    "the same position size.",
+    )
+
     @model_validator(mode="after")
     def _drawdown_thresholds_ordered(self) -> RiskConfig:
         if self.drawdown_reduce_threshold >= self.max_drawdown_limit:
@@ -511,6 +538,100 @@ class BacktestConfig(StrictModel):
         default=252, gt=0, description="Used to annualise returns; 252 for daily bars"
     )
     risk_free_rate: float = Field(default=0.0, ge=0, description="Annual, for Sharpe")
+
+
+class WalkForwardSettings(StrictModel):
+    """Geometry of the rolling train/test evaluation."""
+
+    enabled: bool = True
+    folds: int = Field(default=5, ge=1)
+    #: Explicit window sizes. Null derives them from the history available, so a
+    #: short series produces a smaller study rather than an error.
+    train_bars: int | None = Field(default=None, ge=1)
+    test_bars: int | None = Field(default=None, ge=1)
+    step_bars: int | None = Field(default=None, ge=1)
+    anchored: bool = Field(
+        default=False,
+        description="Grow the training window from a fixed start instead of rolling it. "
+                    "Neither setting is correct in general.",
+    )
+    test_fraction: float = Field(default=0.25, gt=0, lt=1)
+
+
+class MonteCarloSettings(StrictModel):
+    """Trade-sequence resampling."""
+
+    enabled: bool = True
+    simulations: int = Field(default=2_000, ge=1)
+    method: Literal["permutation", "bootstrap"] = "permutation"
+    #: Resample in blocks to preserve streaks. 1 assumes consecutive trades are
+    #: independent, which they are not.
+    block_size: int = Field(default=1, ge=1)
+
+
+class RobustnessSettings(StrictModel):
+    """Parameter sensitivity sweeps."""
+
+    enabled: bool = True
+    #: Dotted paths into the configuration, e.g. ``features.rsi_period``.
+    parameters: list[str] = Field(default_factory=list)
+    #: Fractional half-width of the neighbourhood swept around each value.
+    span: float = Field(default=0.3, gt=0, lt=1)
+    points: int = Field(default=5, ge=3)
+
+
+class ResearchConfig(StrictModel):
+    """How a validation study is run.
+
+    None of these settings is a performance dial. They decide how hard the
+    evidence is tested, and loosening them makes a result look better without
+    making it truer.
+    """
+
+    #: (in-sample, validation, out-of-sample) proportions of the usable history.
+    split_fractions: tuple[float, float, float] = (0.5, 0.2, 0.3)
+
+    #: Bars dropped between windows so a trade opened in one cannot still be
+    #: open in the next. Zero lets one market episode be scored twice.
+    embargo_bars: int = Field(default=5, ge=0)
+
+    #: How candidates are ranked on training windows. Return-maximising
+    #: objectives are rejected by the objective registry on purpose.
+    objective: str = "sortino"
+
+    #: Below this many trades in a window, the study declines to conclude.
+    min_trades_for_conclusions: int = Field(default=30, ge=1)
+
+    #: Strategy pairs correlated above this are reported as redundancy
+    #: hypotheses. They are never acted on automatically.
+    correlation_threshold: float = Field(default=0.7, ge=0, le=1)
+
+    #: Run each strategy alone over the in-sample window, so their returns can
+    #: be correlated. The graph aggregates every strategy into one signal before
+    #: a position opens, so without this the trade log only ever shows the
+    #: ensemble. It is also the most expensive part of a study - one extra
+    #: backtest per strategy - so it can be turned off while iterating, at the
+    #: cost of the return-correlation half of the analysis.
+    isolate_strategies: bool = True
+
+    #: Test the weight/selection variants a redundancy finding suggests, on data
+    #: not used to find the redundancy.
+    test_weight_variants: bool = True
+    variant_down_weight: float = Field(default=0.5, ge=0, le=1)
+
+    walk_forward: WalkForwardSettings = Field(default_factory=WalkForwardSettings)
+    monte_carlo: MonteCarloSettings = Field(default_factory=MonteCarloSettings)
+    robustness: RobustnessSettings = Field(default_factory=RobustnessSettings)
+
+    @field_validator("split_fractions")
+    @classmethod
+    def _positive_fractions(cls, v: tuple[float, float, float]) -> tuple[float, float, float]:
+        if any(f <= 0 for f in v):
+            raise ValueError(
+                f"Every split fraction must be positive, got {v}. A study with an empty "
+                "window is a study missing the part that would have contradicted it."
+            )
+        return v
 
 
 class PlatformConfig(StrictModel):

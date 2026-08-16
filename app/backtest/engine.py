@@ -38,6 +38,7 @@ from app.config.loader import AppConfig
 from app.config.models import AssetConfig
 from app.data.cache import frame_checksum
 from app.data.schema import MarketData
+from app.data.validators.quality import DataQualityEngine
 from app.execution.models import ExitReason, Order, Position
 from app.execution.simulator import ExecutionSimulator
 from app.features.engine import FeatureEngine
@@ -100,7 +101,7 @@ class Backtester:
     def run(
         self,
         data: MarketData,
-        quality_status: str = "UNKNOWN",
+        quality_status: str | None = None,
         trading_enabled: bool = True,
     ) -> BacktestResult:
         """Backtest ``data`` and return the full result.
@@ -108,13 +109,19 @@ class Backtester:
         Args:
             data: validated market data from the phase-1 pipeline.
             quality_status: the data-quality grade, recorded in provenance so a
-                result computed on WARNING-grade data says so.
+                result computed on WARNING-grade data says so, and passed to the
+                risk engine so it can refuse to size against bad data. When
+                omitted the backtester grades the series itself rather than
+                proceeding on an unverified frame - a caller that reached the
+                backtester without going through :class:`MarketDataService`
+                must not thereby escape the quality gate.
             trading_enabled: the kill switch. Defaults to True here because a
                 backtest that opens no positions is not a backtest; the live
                 and paper paths take it from configuration instead.
         """
         df = data.df
         backtest_cfg = self.config.backtest
+        quality_status, quality_source = self._resolve_quality(data, quality_status)
 
         portfolio = Portfolio(backtest_cfg.initial_balance, self.config.platform.base_currency)
         performance = RegimePerformanceTracker()
@@ -125,6 +132,7 @@ class Backtester:
             asset=self.asset,
             performance=performance,
             trading_enabled=trading_enabled,
+            data_quality=quality_status,
         )
         simulator = ExecutionSimulator(self.config.execution, self.asset)
 
@@ -225,8 +233,37 @@ class Backtester:
             )
 
         return self._build_result(
-            data, portfolio, performance, decisions, node_errors, blocked, quality_status, warmup
+            data, portfolio, performance, decisions, node_errors, blocked,
+            quality_status, quality_source, warmup,
         )
+
+    # ------------------------------------------------------------ data quality
+
+    def _resolve_quality(self, data: MarketData, supplied: str | None) -> tuple[str, str]:
+        """Determine the grade this run is operating under, and where it came from.
+
+        Grading here rather than trusting a default string is the difference
+        between a gate and a label. The normal path arrives with a grade from
+        :class:`MarketDataService`; anything else gets graded now, so there is
+        no route from a corrupt frame to an open position that does not pass a
+        quality check.
+        """
+        if supplied is not None:
+            return str(supplied), "caller"
+
+        try:
+            report = DataQualityEngine(self.config.data.quality).validate(
+                data, self.config.assets.assets.get(data.symbol.upper())
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed grading is not a pass
+            logger.warning(
+                "Data-quality grading failed; the run proceeds as unverified, which the "
+                "risk engine treats as a refusal",
+                extra={"symbol": data.symbol, "error": str(exc)},
+            )
+            return "UNKNOWN", "grading-failed"
+
+        return str(report.status), "self-graded"
 
     # -------------------------------------------------------------- bar steps
 
@@ -400,6 +437,7 @@ class Backtester:
         node_errors: list[dict[str, Any]],
         blocked: Counter[str],
         quality_status: str,
+        quality_source: str,
         warmup: int,
     ) -> BacktestResult:
         trades = portfolio.trades_frame()
@@ -429,6 +467,7 @@ class Backtester:
             data_provider=data.provider,
             data_checksum=frame_checksum(data.df),
             data_quality=quality_status,
+            data_quality_source=quality_source,
             random_seed=self.config.platform.random_seed,
             config_snapshot={
                 "risk": self.config.risk.model_dump(),

@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.backtest.engine import Backtester  # noqa: E402
-from app.config.loader import get_config  # noqa: E402
+from app.config.loader import get_config, override_config  # noqa: E402
 from app.data.service import MarketDataService  # noqa: E402
 from app.data.validators.quality import DataQualityError  # noqa: E402
 from app.utils.logging import setup_logging  # noqa: E402
@@ -61,11 +61,8 @@ def run_one(symbol: str, args: argparse.Namespace) -> int:
         return 1
 
     if args.max_bars:
-        config = config.__class__(
-            **{
-                **{k: getattr(config, k) for k in config.__dataclass_fields__},
-                "backtest": config.backtest.model_copy(update={"max_bars": args.max_bars}),
-            }
+        config = override_config(
+            config, backtest=config.backtest.model_copy(update={"max_bars": args.max_bars})
         )
 
     backtester = Backtester(

@@ -64,10 +64,12 @@ class TradingGraph:
         performance: RegimePerformanceTracker | None = None,
         correlations_provider: Callable[[], pd.DataFrame | None] | None = None,
         trading_enabled: bool | None = None,
+        data_quality: str | None = None,
     ) -> None:
         self.config = config
         self.portfolio = portfolio
         self.asset = asset
+        self.data_quality = data_quality
 
         self.strategies = strategies or build_enabled_strategies(config.strategies)
         if not self.strategies:
@@ -85,6 +87,7 @@ class TradingGraph:
             trading_enabled=(
                 config.platform.trading_enabled if trading_enabled is None else trading_enabled
             ),
+            data_quality=data_quality,
         )
         self.correlations_provider = correlations_provider
 
@@ -156,9 +159,13 @@ class TradingGraph:
         market_data: Any,
         equity: float,
         features: Any = None,
+        data_quality: str | None = None,
     ) -> TradingState:
         """Execute the graph for one bar and return the final state."""
-        state = new_state(symbol, timeframe, timestamp, market_data, equity, features)
+        state = new_state(
+            symbol, timeframe, timestamp, market_data, equity, features,
+            data_quality if data_quality is not None else self.data_quality,
+        )
         result = self._graph.invoke(state)
         return result  # type: ignore[return-value]
 

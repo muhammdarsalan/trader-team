@@ -342,6 +342,53 @@ def test_all_suppressed_yields_zero_weights():
     assert sum(w.weight for w in result.values()) == 0.0
 
 
+def test_a_configured_standing_weight_tilts_the_selection():
+    """The lever the phase-4 redundancy experiments pull.
+
+    Testing whether down-weighting a correlated strategy helps requires the
+    weight to actually reach the selector; without this the whole comparison
+    would be between identical configurations.
+    """
+    from app.config.models import StrategyConfig
+
+    selector = StrategySelector()
+    full = selector.select(
+        [TrendFollowingStrategy(), MomentumStrategy()], regime(RegimeType.TRENDING_UP)
+    )
+    halved = selector.select(
+        [
+            TrendFollowingStrategy(),
+            MomentumStrategy(config=StrategyConfig(weight=0.5)),
+        ],
+        regime(RegimeType.TRENDING_UP),
+    )
+
+    assert halved["momentum"].base_weight == 0.5
+    assert halved["momentum"].weight < full["momentum"].weight
+    assert halved["trend_following"].weight > full["trend_following"].weight
+    assert sum(w.weight for w in halved.values()) == pytest.approx(1.0)
+
+
+def test_a_zero_standing_weight_silences_a_strategy():
+    from app.config.models import StrategyConfig
+
+    result = StrategySelector().select(
+        [
+            TrendFollowingStrategy(),
+            MomentumStrategy(config=StrategyConfig(weight=0.0)),
+        ],
+        regime(RegimeType.TRENDING_UP),
+    )
+    assert result["momentum"].weight == 0.0
+    assert result["trend_following"].weight == pytest.approx(1.0)
+
+
+def test_the_default_standing_weight_changes_nothing():
+    selector = StrategySelector()
+    result = selector.select([TrendFollowingStrategy()], regime(RegimeType.TRENDING_UP))
+    assert result["trend_following"].base_weight == 1.0
+
+
 def test_selector_records_its_reasoning():
     selector = StrategySelector()
     result = selector.select([TrendFollowingStrategy()], regime(RegimeType.TRENDING_UP))

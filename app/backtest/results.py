@@ -62,6 +62,10 @@ class RunProvenance:
     data_provider: str
     data_checksum: str
     data_quality: str
+    #: How the grade above was obtained: "caller" (passed in by the data
+    #: service), "self-graded" (the backtester ran the quality engine itself)
+    #: or "grading-failed". A result is only as trustworthy as this field.
+    data_quality_source: str = "caller"
     git_revision: str = field(default_factory=git_revision)
     random_seed: int = 42
     created_at: str = field(default_factory=lambda: utcnow().isoformat())
@@ -78,6 +82,7 @@ class RunProvenance:
             "data_provider": self.data_provider,
             "data_checksum": self.data_checksum,
             "data_quality": self.data_quality,
+            "data_quality_source": self.data_quality_source,
             "git_revision": self.git_revision,
             "random_seed": self.random_seed,
             "created_at": self.created_at,
@@ -116,7 +121,8 @@ class BacktestResult:
             f"Period:       {self.provenance.start} -> {self.provenance.end}",
             f"Bars:         {self.provenance.bars:,}",
             f"Data:         {self.provenance.data_provider} "
-            f"(quality {self.provenance.data_quality}, checksum {self.provenance.data_checksum})",
+            f"(quality {self.provenance.data_quality} [{self.provenance.data_quality_source}], "
+            f"checksum {self.provenance.data_checksum})",
             f"Git revision: {self.provenance.git_revision}",
             f"Random seed:  {self.provenance.random_seed}",
             "",

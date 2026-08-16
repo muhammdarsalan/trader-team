@@ -1,0 +1,96 @@
+# Validation study settings.
+#
+# Nothing in this file is a performance dial. Every setting decides how hard a
+# configuration is tested, and loosening one makes the result look better
+# without making it any truer. The shipped values are the strict ones.
+
+# Proportions of the usable history given to each window, in order:
+# in-sample, validation, out-of-sample.
+#
+# The out-of-sample window is the LAST third, not a random third. Research runs
+# forward through time, so the untouched data has to be the data that had not
+# happened yet when the configuration was designed.
+split_fractions: [0.5, 0.2, 0.3]
+
+# Bars dropped between windows. A trade opened near the end of one window can
+# still be open at the start of the next; without a gap the same market episode
+# is scored twice and the second scoring is contaminated by a position the
+# first one opened.
+embargo_bars: 5
+
+# How candidate configurations are ranked on training windows.
+# Return-maximising objectives are rejected by the objective registry: ranking
+# by return selects for risk taken rather than for edge.
+# One of: sortino, sharpe, expectancy_r, calmar, risk_adjusted
+objective: sortino
+
+# Below this many trades in a window, the study declines to draw a conclusion
+# rather than drawing an unstable one.
+min_trades_for_conclusions: 30
+
+# --- Strategy correlation ---
+# Pairs correlated above this are reported as redundancy HYPOTHESES. No
+# strategy is ever removed or re-weighted automatically: a correlation measured
+# on one window is not evidence that dropping a strategy improves anything, and
+# deleting components on the strength of an in-sample correlation matrix is a
+# well-travelled route to a system beautifully diversified against the past.
+correlation_threshold: 0.7
+
+# Run each strategy alone over the in-sample window so their returns can be
+# correlated. The graph aggregates every strategy into one signal before a
+# position opens, so without this the trade log only ever shows the ensemble.
+# It is the most expensive part of a study - one extra backtest per strategy -
+# so turn it off while iterating, at the cost of the return-correlation half of
+# the analysis. Signal agreement is still measured either way.
+isolate_strategies: true
+
+# Instead, each hypothesis becomes a configuration variant that gets tested on
+# data not used to find the redundancy.
+test_weight_variants: true
+variant_down_weight: 0.5
+
+# --- Walk-forward ---
+walk_forward:
+  enabled: true
+  folds: 5
+  # Null derives the window sizes from the history actually available, so a
+  # short series produces a smaller study rather than an error.
+  train_bars: null
+  test_bars: null
+  step_bars: null
+  test_fraction: 0.25
+  # Anchored keeps the training window's start fixed so it grows; rolling keeps
+  # it a fixed length and adapts faster to a changed market. Neither is correct
+  # in general, which is why the choice is recorded with the result.
+  anchored: false
+
+# --- Monte Carlo ---
+monte_carlo:
+  enabled: true
+  simulations: 2000
+  # permutation reorders exactly the trades that happened and bounds sequencing
+  # risk. bootstrap resamples with replacement and assumes the trades are draws
+  # from a stable process - a premise doing real work, not a fact.
+  method: permutation
+  # Resample in blocks to keep losing streaks intact. 1 assumes consecutive
+  # trades are independent, which they are not, and so understates drawdown.
+  block_size: 1
+
+# --- Parameter robustness ---
+# The question is never "which value is best" - that question is the
+# overfitting machine itself. It is "is the neighbourhood flat?". A parameter
+# whose neighbours all behave similarly describes something real, however
+# mediocre. A sharp peak at the shipped value describes the sample.
+robustness:
+  enabled: true
+  span: 0.3      # sweep +/- 30% around each current value
+  points: 5
+  parameters:
+    - features.rsi_period
+    - features.atr_period
+    - features.adx_period
+    - risk.risk_per_trade
+    - strategies.strategies.trend_following.params.adx_minimum
+    - strategies.strategies.trend_following.params.stop_atr_multiple
+    - strategies.strategies.mean_reversion.params.max_adx
+    - strategies.strategies.breakout.params.channel_period

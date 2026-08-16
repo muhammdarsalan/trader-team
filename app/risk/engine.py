@@ -19,12 +19,31 @@ import numpy as np
 import pandas as pd
 
 from app.config.models import AssetConfig, RiskConfig
+from app.data.validators.quality import QualityStatus
 from app.portfolio.portfolio import Portfolio
 from app.risk.models import RiskBlockReason, RiskDecision, RiskVerdict
 from app.signals.models import Signal
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def normalize_quality(value: QualityStatus | str | None) -> QualityStatus | None:
+    """Coerce a data-quality grade to :class:`QualityStatus`, or None if unstated.
+
+    ``None`` is returned for anything that does not name a real grade -
+    including the literal string ``"UNKNOWN"``, which several call sites use as
+    a placeholder. That placeholder must not be mistaken for a pass, so it maps
+    to the same "not verified" state as no answer at all.
+    """
+    if value is None:
+        return None
+    if isinstance(value, QualityStatus):
+        return value
+    try:
+        return QualityStatus[str(value).strip().upper()]
+    except KeyError:
+        return None
 
 
 class RiskEngine:
@@ -34,10 +53,15 @@ class RiskEngine:
         self,
         config: RiskConfig | None = None,
         trading_enabled: bool = False,
+        data_quality: QualityStatus | str | None = None,
     ) -> None:
         self.config = config or RiskConfig()
         # The global kill switch. While False no position opens, in any mode.
         self.trading_enabled = trading_enabled
+        # The grade the quality engine gave the series this engine is sizing
+        # against. Set once per run by whoever owns the data; overridable per
+        # call for a feed whose grade changes bar to bar.
+        self.data_quality = normalize_quality(data_quality)
 
     # ------------------------------------------------------------------- API
 
@@ -48,6 +72,7 @@ class RiskEngine:
         equity: float,
         asset: AssetConfig | None = None,
         correlations: pd.DataFrame | None = None,
+        data_quality: QualityStatus | str | None = None,
     ) -> RiskDecision:
         """Decide whether and how large to trade ``signal``.
 
@@ -57,6 +82,9 @@ class RiskEngine:
             equity: current mark-to-market equity.
             asset: asset config, for notional and minimum-size rules.
             correlations: symbol correlation matrix, when available.
+            data_quality: grade of the series this signal was derived from.
+                Falls back to the grade the engine was constructed with. When
+                neither is supplied the engine refuses rather than assuming.
 
         Returns:
             A :class:`RiskDecision` recording the arithmetic and every check.
@@ -76,6 +104,11 @@ class RiskEngine:
                 "Trading is disabled by the global kill switch; the signal was analysed "
                 "but no position was opened",
             )
+
+        quality = self._effective_quality(data_quality)
+        quality_block = self._data_quality_block(quality)
+        if quality_block is not None:
+            return quality_block
 
         risk_per_unit = signal.risk_per_unit
         if risk_per_unit is None or risk_per_unit <= 0:
@@ -258,6 +291,7 @@ class RiskEngine:
                 "open_positions": portfolio.open_count,
                 "open_risk": portfolio.open_risk(),
                 "risk_pct_of_equity": risk_amount / equity if equity else 0.0,
+                "data_quality": str(quality),
             },
         )
 
@@ -272,6 +306,65 @@ class RiskEngine:
         return decision
 
     # -------------------------------------------------------------- internals
+
+    def _effective_quality(
+        self, per_call: QualityStatus | str | None
+    ) -> QualityStatus | None:
+        """The grade in force for this decision.
+
+        A per-call grade wins over the constructor's, and an unrecognised
+        per-call value does not silently fall back to a friendlier
+        constructor grade - it is the caller asserting something the engine
+        cannot read, which is exactly the case that must not pass.
+        """
+        if per_call is not None:
+            return normalize_quality(per_call)
+        return self.data_quality
+
+    def _data_quality_block(self, quality: QualityStatus | None) -> RiskDecision | None:
+        """Refuse to size a position on data that was never verified, or failed.
+
+        The quality engine already refuses to *hand over* FAIL-grade data on the
+        normal path, but that path is not the only one: a caller can disable
+        validation, load a frame straight from disk, or forget to pass the grade
+        along. Repeating the check at the point where money is committed means a
+        degraded series cannot reach a position size by taking a side entrance,
+        and the refusal is recorded like every other no-trade decision.
+        """
+        cfg = self.config
+
+        if quality is None:
+            if not cfg.require_known_data_quality:
+                return None
+            return RiskDecision.reject(
+                RiskBlockReason.DATA_QUALITY_UNKNOWN,
+                "No data-quality grade was supplied with this signal, so the series "
+                "backing it is unverified. An unstated grade is treated as a refusal: "
+                "'nobody checked' must not size the same position as 'checked and passed'. "
+                "Pass the quality report's status through, or set "
+                "require_known_data_quality: false in configs/risk.yaml to accept the risk "
+                "deliberately.",
+                data_quality="UNVERIFIED",
+            )
+
+        if quality is QualityStatus.FAIL and cfg.block_on_data_quality_fail:
+            return RiskDecision.reject(
+                RiskBlockReason.DATA_QUALITY,
+                "The data-quality gate graded this series FAIL. Every input to position "
+                "sizing descends from that series, so no size computed from it is "
+                "meaningful.",
+                data_quality=str(quality),
+            )
+
+        if quality is QualityStatus.WARNING and cfg.block_on_data_quality_warning:
+            return RiskDecision.reject(
+                RiskBlockReason.DATA_QUALITY,
+                "The data-quality gate graded this series WARNING and "
+                "block_on_data_quality_warning is set, so no new position is opened.",
+                data_quality=str(quality),
+            )
+
+        return None
 
     def _base_risk_amount(self, equity: float) -> float:
         cfg = self.config

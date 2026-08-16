@@ -61,6 +61,10 @@ class TradingState(TypedDict, total=False):
     timestamp: pd.Timestamp
     market_data: MarketData
     equity: float
+    #: The quality gate's grade for ``market_data``. Carried in state so the
+    #: risk node sizes against data it knows the provenance of; an absent value
+    #: means "unverified", not "fine".
+    data_quality: str
 
     # --- computed by nodes -------------------------------------------------
     features: FeatureSet
@@ -87,12 +91,17 @@ def new_state(
     market_data: MarketData,
     equity: float,
     features: FeatureSet | None = None,
+    data_quality: str | None = None,
 ) -> TradingState:
     """Fresh state for one bar.
 
     ``features`` may be supplied by a caller that has already computed them -
     the backtester does, once for the whole series - in which case the feature
     node passes them through untouched.
+
+    ``data_quality`` is the grade the quality gate gave this series. Leaving it
+    out is not neutral: the risk engine reads an absent grade as unverified and
+    refuses to open a position.
     """
     state = TradingState(
         symbol=symbol.upper(),
@@ -106,6 +115,8 @@ def new_state(
     )
     if features is not None:
         state["features"] = features
+    if data_quality is not None:
+        state["data_quality"] = data_quality
     return state
 
 

@@ -194,6 +194,10 @@ def make_risk_node(
             equity=state.get("equity", portfolio.initial_balance),
             asset=asset,
             correlations=correlations,
+            # None here means "state did not carry a grade", which the engine
+            # resolves against the grade it was constructed with rather than
+            # treating as a pass.
+            data_quality=state.get("data_quality"),
         )
         return {
             "risk_decision": decision,

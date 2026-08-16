@@ -154,6 +154,34 @@ graph still runs and still analyses; every blocked order is recorded with reason
 `KILL_SWITCH`. The backtester passes `trading_enabled=True` explicitly, because
 a backtest that opens nothing is not a backtest.
 
+### Data quality is a risk limit, not a report header
+
+Every input to position sizing — equity, stop distance, ATR — descends from the
+price series. So the grade the quality gate gave that series reaches the sizing
+decision:
+
+| Grade | Default behaviour | Reason |
+|---|---|---|
+| `FAIL` | Rejected, reason `DATA_QUALITY` | No size computed from corrupt inputs is meaningful |
+| unstated | Rejected, reason `DATA_QUALITY_UNKNOWN` | "Nobody checked" must not size the same position as "checked and passed" |
+| `WARNING` | Allowed, recorded in the decision metrics | Nearly every long window has a stale final bar or a holiday gap |
+| `PASS` | Allowed | — |
+
+The literal string `"UNKNOWN"` is *not* a grade: it normalises to the same
+unverified state as no answer at all, so a placeholder cannot be mistaken for a
+pass.
+
+`MarketDataService` already refuses to hand over FAIL-grade data, but that is
+not the only route in — a caller can disable validation or build a `MarketData`
+straight from a frame. So `Backtester.run` **grades the series itself** when no
+grade is supplied, and provenance records whether the grade came from the
+`caller`, was `self-graded`, or where grading failed. Repeating the check where
+money is committed means a degraded series cannot reach a position size by
+taking a side entrance.
+
+For paper trading, where a stale or gappy feed is a live hazard rather than a
+footnote, set `block_on_data_quality_warning: true` in `configs/risk.yaml`.
+
 ---
 
 ## Metrics
@@ -177,6 +205,8 @@ rather than buried:
 - Large return with almost no drawdown — the signature of a bug
 - Sharpe > 3 — far above what systematic strategies sustain out of sample
 - Ambiguous same-bar exits — how many trades rest on that assumption
+- Trades refused because of the window's data quality — few trades then read as
+  a refusal rather than as a quiet strategy
 
 These sit next to the figures because the figures are what get copied into a
 decision.
@@ -195,6 +225,7 @@ Every run records what produced it:
   "data_provider": "yahoo",
   "data_checksum": "8efec84040b805bf3e45e41ec2b5c848",
   "data_quality": "WARNING",
+  "data_quality_source": "caller",
   "git_revision": "1207966-dirty",
   "random_seed": 42,
   "config_snapshot": { "risk": {...}, "execution": {...}, ... }
@@ -206,7 +237,13 @@ because a result produced from modified code is not reproducible from the commit
 alone and saying so beats a hash that lies.
 
 `data_quality` travels with the result, so a figure computed on WARNING-grade
-data says so on its face.
+data says so on its face. `data_quality_source` says where that grade came from
+— `caller`, `self-graded` or `grading-failed` — because a result is only as
+trustworthy as the provenance of the check behind it.
+
+For studies rather than single runs, phase 4 adds a SQLite experiment store with
+ids derived from the configuration, the data and the code rather than from a
+counter. See [research.md](research.md).
 
 ```bash
 python scripts/run_backtest.py --symbol XAUUSD --timeframe 1D --start 2012-01-01 --save

@@ -31,30 +31,34 @@ It exists to answer one question scientifically:
 
 ## Status
 
-**Phases 1–3 of 5 complete** — data, features, strategies, graph, risk,
-execution, backtesting.
+**Phases 1–4 of 5 complete** — data, features, strategies, graph, risk,
+execution, backtesting, and the validation machinery that tries to break it all.
 
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Config, data layer, quality engine, ingest | ✅ Complete |
 | 2 | Features, regime detection, 5 strategies, signals | ✅ Complete |
 | 3 | LangGraph workflow, selector, risk, execution, backtester | ✅ Complete |
-| 4 | Walk-forward, OOS, Monte Carlo, robustness, experiment DB | ⬜ Not started |
+| 4 | Walk-forward, OOS, Monte Carlo, robustness, experiment DB | ✅ Complete |
 | 5 | Paper trading, Streamlit dashboard, docs | ⬜ Not started |
 
 What works today: download and validate 26 years of daily OHLCV across six
 instruments; compute a causal feature panel; classify market regimes; run five
 independent strategies through a LangGraph decision graph; weight them by
 regime and measured performance; size positions against a full set of risk
-limits; simulate fills with spread, slippage, commission and gaps; and produce a
-reproducible backtest with a complete trade and no-trade log.
+limits; simulate fills with spread, slippage, commission and gaps; produce a
+reproducible backtest with a complete trade and no-trade log; and then subject
+that configuration to strict out-of-sample testing, walk-forward analysis,
+Monte Carlo resampling of the trade sequence, parameter-neighbourhood sweeps and
+data-snooping arithmetic, with every study recorded under a reproducible id.
 
 **No profitability claim is made anywhere in this project.** The backtester
 reports what happened on one historical sample, warnings included. On the
 recommended XAUUSD window the current default configuration **loses money**
 (−7.5% over 14 years, profit factor 0.96), and that number is printed exactly as
-computed. Every strategy parameter remains a hypothesis awaiting the validation
-machinery of phase 4.
+computed. The phase-4 validation report has no verdict meaning "profitable" and
+never will; its best available conclusion is *survived this round of testing*,
+and its most common one is that a configuration has not been shown to work.
 
 ---
 
@@ -96,6 +100,12 @@ python scripts/analyze_market.py --symbol XAUUSD --timeframe 1D --history 250
 # Run a backtest and save a reproducible experiment record
 python scripts/run_backtest.py --symbol XAUUSD --timeframe 1D --start 2012-01-01 --save
 
+# Validate a configuration out of sample, walk forward and under resampling
+python scripts/run_research.py --symbol XAUUSD --timeframe 1D --start 2012-01-01
+
+# What has already been tried against this data
+python scripts/run_research.py --list-experiments
+
 # Run the tests
 pytest -m "not network"
 ```
@@ -131,8 +141,9 @@ app/risk/       position sizing and exposure limits
 app/portfolio/  positions, equity curve, exposure
 app/execution/  realistic fill simulation
 app/backtest/   event-driven engine, metrics, provenance
-app/ml/         optional classical ML                      [phase 4]
-app/database/   SQLite experiment tracking                 [phase 4]
+                         ↓
+app/research/   splits, walk-forward, Monte Carlo, robustness,
+                overfitting diagnostics, SQLite experiment store
 app/paper_trading/                                         [phase 5]
 dashboard/      Streamlit UI                               [phase 5]
 ```
@@ -167,6 +178,7 @@ Design rules the codebase holds to:
 | `configs/risk.yaml` | Position sizing and every exposure limit |
 | `configs/execution.yaml` | Spread, slippage, commission, fill assumptions |
 | `configs/backtest.yaml` | Balance, warm-up, annualisation |
+| `configs/research.yaml` | Splits, embargo, walk-forward, Monte Carlo, sweeps |
 
 Environment overrides: `TRADING_MODE`, `TRADING_ENABLED`, `GTP_LOG_LEVEL`,
 `GTP_RANDOM_SEED`, `GTP_STARTING_BALANCE`, `GTP_BASE_CURRENCY`.
@@ -201,20 +213,22 @@ Bring your own data any time: drop `data/raw/<SYMBOL>_<TIMEFRAME>.csv` and pass
 ## Testing
 
 ```bash
-pytest -m "not network"    # default: fully offline and deterministic
-pytest -m network          # the one live-endpoint test
-pytest --cov=app           # with coverage
+pytest -m "not network"              # default: fully offline and deterministic
+pytest -m "not network and not slow" # skip the end-to-end validation studies
+pytest -m network                    # the one live-endpoint test
+pytest --cov=app                     # with coverage
 ```
 
-592 offline tests plus one live-endpoint test, covering schema contracts, config
-validation, cleaning, resampling, the quality engine, cache integrity, all three
-providers, the service facade, every indicator, market structure, the feature
-engine, regime detection, the Signal contract, all five strategies, graph
-routing and error isolation, signal aggregation and conflicts, position sizing
-and every risk limit, order fills, slippage, spread, gaps, and backtest
-causality.
+Offline tests covering schema contracts, config validation, cleaning,
+resampling, the quality engine, cache integrity, all three providers, the
+service facade, every indicator, market structure, the feature engine, regime
+detection, the Signal contract, all five strategies, graph routing and error
+isolation, signal aggregation and conflicts, position sizing and every risk
+limit, order fills, slippage, spread, gaps, backtest causality, temporal splits,
+the walk-forward selection rule, Monte Carlo resampling, parameter sweeps,
+overfitting arithmetic and the experiment store.
 
-Three families of test carry unusual weight:
+Five families of test carry unusual weight:
 
 - **Causality.** `assert_causal` recomputes a feature on a truncated series and
   compares the overlap; any difference proves future data was used. It covers
@@ -227,6 +241,14 @@ Three families of test carry unusual weight:
   the trades a full run produced within that window. Any difference proves the
   full run consumed information that had not happened yet. The same test covers
   the equity curve.
+- **Temporal separation is structural.** Evaluation windows must be ordered and
+  disjoint, warm-up prefixes must never reach forward, and the embargo must
+  actually separate. A contaminated split looks exactly like a good one in the
+  output, so it is asserted mechanically instead of argued for.
+- **Walk-forward selection cannot peek.** Each fold's choice must be
+  reconstructible from that fold's training scores alone. Selection informed by
+  the test window turns the whole analysis into an in-sample result and changes
+  nothing visible about the report.
 
 ---
 
@@ -264,6 +286,7 @@ experiments/    experiment records  (gitignored)
 - [docs/strategies.md](docs/strategies.md) — the five strategies, regimes, the Signal contract
 - [docs/graph_engine.md](docs/graph_engine.md) — the LangGraph workflow, state, routing, error isolation
 - [docs/backtesting.md](docs/backtesting.md) — bar ordering, execution realism, risk limits, metrics
+- [docs/research.md](docs/research.md) — validation, walk-forward, overfitting, experiment tracking
 - [docs/architecture.md](docs/architecture.md) — design decisions and rationale
 
 ---
