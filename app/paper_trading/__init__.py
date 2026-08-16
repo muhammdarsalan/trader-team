@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from app.paper_trading.engine import PaperTradingEngine
+from app.paper_trading.engine import PaperTradingEngine, build_graph_visualization
 
-__all__ = ["PaperTradingEngine"]
+__all__ = ["PaperTradingEngine", "build_graph_visualization"]

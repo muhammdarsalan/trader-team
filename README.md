@@ -40,7 +40,7 @@ execution, backtesting, and the validation machinery that tries to break it all.
 | 2 | Features, regime detection, 5 strategies, signals | ✅ Complete |
 | 3 | LangGraph workflow, selector, risk, execution, backtester | ✅ Complete |
 | 4 | Walk-forward, OOS, Monte Carlo, robustness, experiment DB | ✅ Complete |
-| 5 | Paper trading, Streamlit dashboard, docs | ⬜ Not started |
+| 5 | Paper trading, Streamlit dashboard, docs | ✅ Session 2 implemented |
 
 What works today: download and validate 26 years of daily OHLCV across six
 instruments; compute a causal feature panel; classify market regimes; run five
@@ -108,6 +108,9 @@ python scripts/run_research.py --list-experiments
 
 # Run the tests
 pytest -m "not network"
+
+# Launch the paper-trading dashboard
+streamlit run dashboard/streamlit_app.py
 ```
 
 In code:
