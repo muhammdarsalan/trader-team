@@ -1,0 +1,47 @@
+# Fill simulation assumptions.
+#
+# These decide whether a backtest is informative or fiction. Optimistic
+# execution is the most common reason a strategy looks profitable on paper and
+# is not in practice, and every default here is deliberately pessimistic.
+
+# A signal is generated from bar t's close, so the earliest tradable price is
+# bar t+1's open. Filling at the signal bar's close means trading at a price
+# that had already passed by the time the decision existed.
+fill_delay_bars: 1
+
+# --- Spread ---
+# Buys fill at the ask, sells at the bid, using the asset's configured spread.
+apply_spread: true
+spread_multiplier: 1.0
+
+# --- Slippage ---
+# none | fixed_ticks | atr_fraction | percent
+# atr_fraction scales slippage with current volatility, which is more realistic
+# than a fixed figure: fills are worst precisely when markets move fastest.
+slippage_model: atr_fraction
+slippage_value: 0.05
+
+# --- Costs ---
+commission_per_unit: 0.0
+commission_pct: 0.0
+min_commission: 0.0
+
+# --- The same-bar problem ---
+# When one bar's range contains both the stop and the target, OHLC data cannot
+# say which was touched first. "target_first" would believe the flattering
+# possibility every single time and is never the honest default.
+#   stop_first   - assume the loss (conservative, the default)
+#   target_first - assume the win (optimistic; do not use for research)
+#   skip         - discard such trades and report the count
+same_bar_resolution: stop_first
+
+# A gap through the stop fills at the open, not at the stop price. Pretending
+# otherwise removes exactly the losses that hurt most.
+honour_gaps: true
+
+allow_shorts: true
+
+# Reject orders too large relative to the bar's traded value. Only meaningful
+# where volume is real, so it is off by default.
+enforce_volume_limit: false
+max_volume_participation: 0.1

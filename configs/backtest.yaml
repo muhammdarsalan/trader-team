@@ -1,0 +1,24 @@
+# Backtest run settings.
+
+initial_balance: 10000.0
+
+# Bars to skip before trading, so no signal is taken on a partially-formed
+# indicator. Null uses the feature engine's own computed warm-up, which is the
+# correct value and should rarely be overridden.
+warmup_bars: null
+
+# Cap the number of bars processed. For smoke tests only - a truncated run is
+# never a research result.
+max_bars: null
+
+# Close open positions on the final bar so their outcome reaches the metrics.
+# Leaving them open silently omits every trade that had not yet resolved,
+# which flatters a strategy holding a losing position at the end.
+close_positions_at_end: true
+
+# Used to annualise returns and Sharpe. 252 for daily bars; 6*252 for 4H.
+bars_per_year: 252
+
+# Annual risk-free rate for Sharpe. Zero is the honest default unless you have
+# a specific rate in mind for the period being tested.
+risk_free_rate: 0.0

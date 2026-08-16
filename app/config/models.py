@@ -384,6 +384,135 @@ class StrategiesConfig(StrictModel):
         return self.strategies[name]
 
 
+class RiskConfig(StrictModel):
+    """Position sizing and exposure limits.
+
+    Every number here caps something. None of them is a performance setting -
+    a risk engine's job is to bound the damage of being wrong, which it will
+    frequently be.
+    """
+
+    # --- per-trade sizing ---
+    risk_per_trade: float = Field(
+        default=0.01, gt=0, le=0.1,
+        description="Fraction of equity risked between entry and stop",
+    )
+    sizing_method: Literal["percent_risk", "fixed_risk", "fixed_units"] = "percent_risk"
+    fixed_risk_amount: float = Field(default=100.0, gt=0)
+    fixed_units: float = Field(default=1.0, gt=0)
+
+    # --- per-position caps ---
+    max_position_notional_pct: float = Field(
+        default=0.5, gt=0,
+        description="Cap on one position's notional as a fraction of equity. Above 1.0 "
+                    "implies leverage.",
+    )
+    min_position_units: float = Field(default=0.0, ge=0)
+
+    # --- portfolio caps ---
+    max_concurrent_positions: int = Field(default=3, ge=1)
+    max_positions_per_symbol: int = Field(default=1, ge=1)
+    max_portfolio_risk: float = Field(
+        default=0.06, gt=0,
+        description="Total open risk (sum of per-trade risk) as a fraction of equity",
+    )
+    max_portfolio_notional_pct: float = Field(default=3.0, gt=0)
+    max_risk_per_strategy: float = Field(default=0.03, gt=0)
+
+    # --- correlation ---
+    correlation_threshold: float = Field(
+        default=0.7, ge=0, le=1,
+        description="Above this, two symbols count as effectively one exposure",
+    )
+    max_correlated_risk: float = Field(default=0.03, gt=0)
+    correlation_lookback: int = Field(default=60, ge=10)
+
+    # --- drawdown controls ---
+    drawdown_reduce_threshold: float = Field(
+        default=0.10, gt=0, lt=1, description="Above this drawdown, size is scaled down"
+    )
+    drawdown_reduce_factor: float = Field(default=0.5, gt=0, le=1)
+    max_drawdown_limit: float = Field(
+        default=0.20, gt=0, lt=1, description="Above this drawdown, no new trades open"
+    )
+    daily_loss_limit: float = Field(
+        default=0.03, gt=0, lt=1, description="Loss in one day that halts new trades"
+    )
+
+    @model_validator(mode="after")
+    def _drawdown_thresholds_ordered(self) -> RiskConfig:
+        if self.drawdown_reduce_threshold >= self.max_drawdown_limit:
+            raise ValueError(
+                f"drawdown_reduce_threshold ({self.drawdown_reduce_threshold}) must be below "
+                f"max_drawdown_limit ({self.max_drawdown_limit}); otherwise trading halts "
+                "before sizing is ever reduced"
+            )
+        return self
+
+
+class ExecutionConfig(StrictModel):
+    """Fill simulation assumptions.
+
+    These decide whether a backtest is informative or fiction. Optimistic
+    execution assumptions are the most common way a strategy appears profitable
+    on paper and is not in practice.
+    """
+
+    # A signal is generated from bar t's close, so the earliest tradable price
+    # is bar t+1's open. Filling at the signal bar's close is trading on a
+    # price that had already passed.
+    fill_delay_bars: int = Field(default=1, ge=1)
+
+    apply_spread: bool = True
+    spread_multiplier: float = Field(
+        default=1.0, ge=0, description="Scales the asset's configured typical spread"
+    )
+
+    slippage_model: Literal["none", "fixed_ticks", "atr_fraction", "percent"] = "atr_fraction"
+    slippage_value: float = Field(default=0.05, ge=0)
+
+    commission_per_unit: float = Field(default=0.0, ge=0)
+    commission_pct: float = Field(default=0.0, ge=0)
+    min_commission: float = Field(default=0.0, ge=0)
+
+    # When a bar's range contains both the stop and the target, OHLC data
+    # cannot say which was touched first. Assuming the target is a choice to
+    # believe the flattering possibility every single time.
+    same_bar_resolution: Literal["stop_first", "target_first", "skip"] = "stop_first"
+
+    # A gap through the stop fills at the open, not at the stop price. Pretending
+    # otherwise removes exactly the losses that hurt most.
+    honour_gaps: bool = True
+
+    allow_shorts: bool = True
+
+    # Reject orders whose notional exceeds this multiple of the bar's traded
+    # value, where volume is meaningful.
+    max_volume_participation: float = Field(default=0.1, gt=0)
+    enforce_volume_limit: bool = False
+
+
+class BacktestConfig(StrictModel):
+    """Backtest run settings."""
+
+    initial_balance: float = Field(default=10_000.0, gt=0)
+    warmup_bars: int | None = Field(
+        default=None, description="Overrides the feature engine's own warm-up when set"
+    )
+    # A bar-limited run is for smoke tests, never for research conclusions.
+    max_bars: int | None = None
+
+    close_positions_at_end: bool = Field(
+        default=True,
+        description="Close open positions at the final bar so equity is realised. "
+                    "Leaving them open silently omits their outcome from the metrics.",
+    )
+    bars_per_year: int = Field(
+        default=252, gt=0, description="Used to annualise returns; 252 for daily bars"
+    )
+    risk_free_rate: float = Field(default=0.0, ge=0, description="Annual, for Sharpe")
+
+
 class PlatformConfig(StrictModel):
     """Global runtime settings."""
 

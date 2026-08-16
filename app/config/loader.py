@@ -13,10 +13,13 @@ from pydantic import ValidationError
 
 from app.config.models import (
     AssetUniverse,
+    BacktestConfig,
     DataConfig,
+    ExecutionConfig,
     FeatureConfig,
     PlatformConfig,
     RegimeConfig,
+    RiskConfig,
     StrategiesConfig,
 )
 from app.utils.paths import CONFIG_DIR
@@ -88,6 +91,24 @@ def load_strategies_config(config_dir: Path | None = None) -> StrategiesConfig:
     return _build(StrategiesConfig, _read_yaml(path), path)
 
 
+def load_risk_config(config_dir: Path | None = None) -> RiskConfig:
+    """Load ``configs/risk.yaml``."""
+    path = _config_path("risk.yaml", config_dir)
+    return _build(RiskConfig, _read_yaml(path), path)
+
+
+def load_execution_config(config_dir: Path | None = None) -> ExecutionConfig:
+    """Load ``configs/execution.yaml``."""
+    path = _config_path("execution.yaml", config_dir)
+    return _build(ExecutionConfig, _read_yaml(path), path)
+
+
+def load_backtest_config(config_dir: Path | None = None) -> BacktestConfig:
+    """Load ``configs/backtest.yaml``."""
+    path = _config_path("backtest.yaml", config_dir)
+    return _build(BacktestConfig, _read_yaml(path), path)
+
+
 # Environment variables that override platform.yaml, so that a run can be
 # reconfigured without editing tracked files.
 _ENV_OVERRIDES: dict[str, str] = {
@@ -139,6 +160,9 @@ class AppConfig:
     features: FeatureConfig
     regimes: RegimeConfig
     strategies: StrategiesConfig
+    risk: RiskConfig
+    execution: ExecutionConfig
+    backtest: BacktestConfig
 
 
 @lru_cache(maxsize=8)
@@ -151,6 +175,9 @@ def _cached_config(config_dir: str | None) -> AppConfig:
         features=load_feature_config(directory),
         regimes=load_regime_config(directory),
         strategies=load_strategies_config(directory),
+        risk=load_risk_config(directory),
+        execution=load_execution_config(directory),
+        backtest=load_backtest_config(directory),
     )
 
 

@@ -176,6 +176,51 @@ A strategy's confidence measures how well *its own conditions* were met. It is
 not calibrated against outcomes and nothing treats it as a win probability.
 Conflating the two would make the ensemble weighting in phase 3 meaningless.
 
+### The graph creates orders; it never fills them
+
+A fill requires the *next* bar's prices, and the graph only ever sees the bar it
+is analysing. Letting it fill would put look-ahead bias into the architecture
+itself, where no later test could remove it. The backtester and paper loop own
+the fill, because only they can advance time.
+
+### Execution assumptions default to pessimistic
+
+Buys pay the ask, sells receive the bid, slippage scales with ATR, gaps fill at
+the open, and a bar containing both stop and target resolves as a **loss**.
+
+That last one is the sharpest: OHLC data genuinely cannot say which level was
+touched first, and assuming the target means believing the flattering
+possibility every single time. `target_first` exists in the config so the
+sensitivity can be measured, not so it can be used.
+
+### Cleaning-style honesty applied to costs
+
+Entry costs *and* exit costs are charged. Ignoring exit costs roughly halves the
+modelled cost of a round trip, which is the difference between a marginal
+strategy and an apparently profitable one — as the current XAUUSD backtest
+demonstrates, where costs exceed gross trading profit.
+
+### Correlated positions share one risk budget
+
+Three longs in EURUSD, GBPUSD and AUDUSD are one short-dollar bet wearing three
+hats. Correlations are computed from returns, not prices, because two rising
+price series correlate whether or not their movements are related.
+
+### The selector learns only from closed trades
+
+Weighting strategies by their measured performance is the most powerful
+look-ahead bug available: it would weight by results not yet produced. The
+tracker only ingests a trade once it has closed, and refuses to report an
+expectancy below a minimum sample size, since two lucky trades are noise rather
+than evidence.
+
+### Node failures are contained, not fatal
+
+Every graph node is wrapped so an exception is recorded and the run continues.
+The failed component contributes nothing — it is absent, not guessed at. One bad
+indicator killing a 3,000-bar run at bar 1,900 loses the run and teaches very
+little.
+
 ### LIVE mode cannot be selected
 
 `TradingMode.LIVE` exists solely so the validator can reject it with an

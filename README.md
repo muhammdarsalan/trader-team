@@ -31,23 +31,30 @@ It exists to answer one question scientifically:
 
 ## Status
 
-**Phases 1–2 of 5 complete** — data, features, regimes, strategies.
+**Phases 1–3 of 5 complete** — data, features, strategies, graph, risk,
+execution, backtesting.
 
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Config, data layer, quality engine, ingest | ✅ Complete |
 | 2 | Features, regime detection, 5 strategies, signals | ✅ Complete |
-| 3 | LangGraph workflow, selector, risk, execution, backtester | ⬜ Not started |
+| 3 | LangGraph workflow, selector, risk, execution, backtester | ✅ Complete |
 | 4 | Walk-forward, OOS, Monte Carlo, robustness, experiment DB | ⬜ Not started |
 | 5 | Paper trading, Streamlit dashboard, docs | ⬜ Not started |
 
 What works today: download and validate 26 years of daily OHLCV across six
-instruments; compute a causal feature panel; classify market regimes; and run
-five independent strategies that emit standardized, self-validating signals.
+instruments; compute a causal feature panel; classify market regimes; run five
+independent strategies through a LangGraph decision graph; weight them by
+regime and measured performance; size positions against a full set of risk
+limits; simulate fills with spread, slippage, commission and gaps; and produce a
+reproducible backtest with a complete trade and no-trade log.
 
-**No performance claims exist yet, by design.** Nothing has been backtested —
-that is phase 3. Every strategy parameter is a hypothesis awaiting the
-validation machinery of phase 4.
+**No profitability claim is made anywhere in this project.** The backtester
+reports what happened on one historical sample, warnings included. On the
+recommended XAUUSD window the current default configuration **loses money**
+(−7.5% over 14 years, profit factor 0.96), and that number is printed exactly as
+computed. Every strategy parameter remains a hypothesis awaiting the validation
+machinery of phase 4.
 
 ---
 
@@ -86,6 +93,9 @@ python scripts/ingest_data.py --all --timeframe 1D --start 2012-01-01 --save-rep
 # Analyse a market: regime + what every strategy decided, and why
 python scripts/analyze_market.py --symbol XAUUSD --timeframe 1D --history 250
 
+# Run a backtest and save a reproducible experiment record
+python scripts/run_backtest.py --symbol XAUUSD --timeframe 1D --start 2012-01-01 --save
+
 # Run the tests
 pytest -m "not network"
 ```
@@ -116,10 +126,11 @@ app/regimes/    rule-based market-state classification
 app/signals/    the standardized Signal contract
 app/strategies/ five independent strategies + registry
                          ↓
-app/graph/      LangGraph DAG: state, nodes, routing       [phase 3]
-app/risk/       position sizing and exposure limits        [phase 3]
-app/execution/  realistic fill simulation                  [phase 3]
-app/backtest/   event-driven engine and metrics            [phase 3]
+app/graph/      LangGraph DAG: state, nodes, routing
+app/risk/       position sizing and exposure limits
+app/portfolio/  positions, equity curve, exposure
+app/execution/  realistic fill simulation
+app/backtest/   event-driven engine, metrics, provenance
 app/ml/         optional classical ML                      [phase 4]
 app/database/   SQLite experiment tracking                 [phase 4]
 app/paper_trading/                                         [phase 5]
@@ -153,6 +164,9 @@ Design rules the codebase holds to:
 | `configs/features.yaml` | Indicator periods |
 | `configs/regimes.yaml` | Regime classification thresholds |
 | `configs/strategies.yaml` | Which strategies run, and their parameters |
+| `configs/risk.yaml` | Position sizing and every exposure limit |
+| `configs/execution.yaml` | Spread, slippage, commission, fill assumptions |
+| `configs/backtest.yaml` | Balance, warm-up, annualisation |
 
 Environment overrides: `TRADING_MODE`, `TRADING_ENABLED`, `GTP_LOG_LEVEL`,
 `GTP_RANDOM_SEED`, `GTP_STARTING_BALANCE`, `GTP_BASE_CURRENCY`.
@@ -192,12 +206,15 @@ pytest -m network          # the one live-endpoint test
 pytest --cov=app           # with coverage
 ```
 
-441 offline tests plus one live-endpoint test, covering schema contracts, config
+592 offline tests plus one live-endpoint test, covering schema contracts, config
 validation, cleaning, resampling, the quality engine, cache integrity, all three
 providers, the service facade, every indicator, market structure, the feature
-engine, regime detection, the Signal contract and all five strategies.
+engine, regime detection, the Signal contract, all five strategies, graph
+routing and error isolation, signal aggregation and conflicts, position sizing
+and every risk limit, order fills, slippage, spread, gaps, and backtest
+causality.
 
-Two families of test carry unusual weight:
+Three families of test carry unusual weight:
 
 - **Causality.** `assert_causal` recomputes a feature on a truncated series and
   compares the overlap; any difference proves future data was used. It covers
@@ -206,6 +223,10 @@ Two families of test carry unusual weight:
 - **Strategies must be able to fire.** A strategy that always returns `WAIT`
   satisfies every safety property while being useless, so each one is asserted
   to produce a signal under the conditions it targets.
+- **The backtest is causal.** Running over the first N bars must produce exactly
+  the trades a full run produced within that window. Any difference proves the
+  full run consumed information that had not happened yet. The same test covers
+  the equity curve.
 
 ---
 
@@ -241,6 +262,8 @@ experiments/    experiment records  (gitignored)
 - [docs/data.md](docs/data.md) — sources, provenance, schema, quality, limitations
 - [docs/features.md](docs/features.md) — indicators, market structure, causality guarantees
 - [docs/strategies.md](docs/strategies.md) — the five strategies, regimes, the Signal contract
+- [docs/graph_engine.md](docs/graph_engine.md) — the LangGraph workflow, state, routing, error isolation
+- [docs/backtesting.md](docs/backtesting.md) — bar ordering, execution realism, risk limits, metrics
 - [docs/architecture.md](docs/architecture.md) — design decisions and rationale
 
 ---

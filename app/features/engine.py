@@ -76,6 +76,28 @@ class FeatureSet:
         """The most recent feature row, or None if empty."""
         return None if self.df.empty else self.df.iloc[-1]
 
+    def upto(self, timestamp: pd.Timestamp) -> FeatureSet:
+        """A view of this feature set ending at ``timestamp`` inclusive.
+
+        The backtester computes features once over the whole series - which is
+        safe because every feature is causal, proven by ``assert_causal`` - and
+        then hands each bar a set truncated to that bar. The truncation costs
+        almost nothing (it is a slice, not a recomputation) and makes the
+        no-future-data property structural rather than merely tested: a
+        strategy cannot read a row that is not there.
+        """
+        if self.df.empty:
+            return self
+        position = self.df.index.searchsorted(timestamp, side="right")
+        return FeatureSet(
+            symbol=self.symbol,
+            timeframe=self.timeframe,
+            df=self.df.iloc[:position],
+            warmup_bars=self.warmup_bars,
+            suppressed=self.suppressed,
+            metadata=self.metadata,
+        )
+
     def is_warm_at(self, timestamp: pd.Timestamp) -> bool:
         """Whether ``timestamp`` is past the warm-up period."""
         if timestamp not in self.df.index:

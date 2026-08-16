@@ -1,0 +1,48 @@
+# Position sizing and exposure limits.
+#
+# Every number here caps something. None is a performance setting: a risk
+# engine's job is to bound the damage of being wrong, which it will frequently
+# be. Loosening these does not make a strategy better, only louder.
+
+# --- Per-trade sizing ---
+# percent_risk | fixed_risk | fixed_units
+sizing_method: percent_risk
+
+# Fraction of equity risked between entry and stop. 1% is conventional; it is
+# not a recommendation, and small accounts should note that fixed costs make
+# tiny per-trade risk uneconomic.
+risk_per_trade: 0.01
+fixed_risk_amount: 100.0
+fixed_units: 1.0
+
+# --- Per-position caps ---
+# Cap on one position's notional value as a fraction of equity. Above 1.0
+# implies leverage; the platform does not model margin calls, so treat any
+# value above 1.0 as a research assumption rather than something achievable.
+max_position_notional_pct: 0.5
+min_position_units: 0.0
+
+# --- Portfolio caps ---
+max_concurrent_positions: 3
+max_positions_per_symbol: 1
+
+# Total open risk across all positions, as a fraction of equity. With
+# risk_per_trade at 1%, this permits six simultaneous full-risk trades.
+max_portfolio_risk: 0.06
+max_portfolio_notional_pct: 3.0
+
+# One strategy cannot consume the whole risk budget.
+max_risk_per_strategy: 0.03
+
+# --- Correlation ---
+# Two symbols correlated above this threshold are treated as one exposure.
+# Three "independent" longs in EURUSD, GBPUSD and AUDUSD are one dollar bet.
+correlation_threshold: 0.7
+max_correlated_risk: 0.03
+correlation_lookback: 60
+
+# --- Drawdown controls ---
+drawdown_reduce_threshold: 0.10   # above this, halve position size
+drawdown_reduce_factor: 0.5
+max_drawdown_limit: 0.20          # above this, no new positions
+daily_loss_limit: 0.03            # loss in one day that halts new trades
