@@ -235,6 +235,38 @@ class Portfolio:
         self.snapshots.append(snapshot)
         return snapshot
 
+    def risk_baselines(self) -> dict[str, Any]:
+        """The drawdown peak and daily-loss baseline, for persistence.
+
+        Pairs with :meth:`restore_risk_baselines`.
+        """
+        return {
+            "peak_equity": self._peak_equity,
+            "day_start_equity": self._day_start_equity,
+            "current_day": None if self._current_day is None else self._current_day.isoformat(),
+        }
+
+    def restore_risk_baselines(
+        self,
+        peak_equity: float,
+        day_start_equity: float | None = None,
+        current_day: pd.Timestamp | None = None,
+    ) -> None:
+        """Restore the drawdown peak and daily-loss baseline after reloading state.
+
+        The drawdown and daily-loss limits are measured against these two
+        numbers, and neither is derivable from cash and positions alone. A
+        restart that left them at the starting balance would silently widen both
+        limits: an account already 8% down would report no drawdown, and the
+        risk engine would keep sizing as if the loss had not happened.
+        """
+        if peak_equity > 0:
+            self._peak_equity = float(peak_equity)
+        if day_start_equity is not None and day_start_equity > 0:
+            self._day_start_equity = float(day_start_equity)
+        if current_day is not None:
+            self._current_day = current_day.normalize()
+
     def _roll_day(self, timestamp: pd.Timestamp) -> None:
         """Reset the daily loss baseline when the calendar day changes."""
         day = timestamp.normalize()
