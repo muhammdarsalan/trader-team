@@ -76,6 +76,24 @@ class AssetConfig(StrictModel):
     )
     trading_days: Literal["WEEKDAYS", "ALL"] = "WEEKDAYS"
 
+    is_proxy: bool = Field(
+        default=False,
+        description=(
+            "True when the configured provider series stands in for the instrument "
+            "rather than being the instrument - for example front-month futures used "
+            "as a proxy for a spot rate. Monitoring surfaces must label proxy series "
+            "as proxies, and a YAML comment cannot reach a dashboard."
+        ),
+    )
+    data_caveat: str | None = Field(
+        default=None,
+        description=(
+            "Operator-facing caveat shown wherever this instrument's data is "
+            "displayed. Use it for limitations a reader must know to interpret a "
+            "number correctly, such as proxy tracking error."
+        ),
+    )
+
     default_timeframe: str = "1D"
     enabled: bool = True
 

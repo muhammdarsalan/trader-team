@@ -33,6 +33,15 @@ assets:
     trading_days: WEEKDAYS
     default_timeframe: 1D
     enabled: true
+    # Surfaced on the dashboard and in paper-trading state. The comment above
+    # explains the caveat to whoever reads this file; this field is what carries
+    # it to whoever reads a result.
+    is_proxy: true
+    data_caveat: >-
+      Prices come from Yahoo GC=F, COMEX front-month gold futures used as a proxy
+      for spot XAUUSD. Yahoo publishes no spot gold series. The proxy differs from
+      spot through contract roll, futures basis and exchange hours versus 24h spot
+      trading, so levels and gaps are not true spot XAUUSD.
 
   EURUSD:
     name: Euro / US Dollar
@@ -50,6 +59,11 @@ assets:
     trading_days: WEEKDAYS
     default_timeframe: 1D
     enabled: true
+    data_caveat: >-
+      Yahoo's OTC FX feed is a sampled composite, not a traded series. Phase 1
+      measured OHLC bound violations in a small percentage of bars. The data-quality
+      engine grades every request and its verdict is authoritative; treat a WARNING
+      grade here as a real limitation of the feed, not as noise to ignore.
 
   GBPUSD:
     name: British Pound / US Dollar
@@ -67,6 +81,10 @@ assets:
     trading_days: WEEKDAYS
     default_timeframe: 1D
     enabled: true
+    data_caveat: >-
+      Yahoo's OTC FX feed is a sampled composite, not a traded series, and phase 1
+      measured OHLC bound violations in a small percentage of bars. The
+      data-quality grade for each request is authoritative.
 
   USDJPY:
     name: US Dollar / Japanese Yen
@@ -84,6 +102,12 @@ assets:
     trading_days: WEEKDAYS
     default_timeframe: 1D
     enabled: true
+    # Yahoo publishes this pair as JPY=X, which is USD/JPY. The mapping is
+    # correct but easy to misread, so it is stated where it will be seen.
+    data_caveat: >-
+      Sourced from Yahoo JPY=X (USD per JPY quote convention, i.e. USDJPY). OTC FX
+      composite with the same bound-violation caveat as the other FX pairs; the
+      data-quality grade for each request is authoritative.
 
   US30:
     name: Dow Jones Industrial Average
@@ -100,6 +124,11 @@ assets:
     trading_days: WEEKDAYS
     default_timeframe: 1D
     enabled: true
+    is_proxy: true
+    data_caveat: >-
+      ^DJI is the cash index, which is not itself tradable. A real US30 position
+      would be a CFD or future whose price differs from the index through
+      financing, dividends and extended trading hours.
 
   NASDAQ:
     name: Nasdaq Composite Index
@@ -116,3 +145,8 @@ assets:
     trading_days: WEEKDAYS
     default_timeframe: 1D
     enabled: true
+    is_proxy: true
+    data_caveat: >-
+      ^IXIC is the Nasdaq Composite cash index and is not itself tradable. It is
+      also a different basket from the Nasdaq-100 that most "NASDAQ" derivatives
+      track, so results here do not transfer to an NQ or US100 instrument.

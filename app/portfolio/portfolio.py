@@ -213,6 +213,24 @@ class Portfolio:
             low, high = self._excursions.get(id(position), (price, price))
             self._excursions[id(position)] = (min(low, price), max(high, price))
 
+    def excursion_bounds(self, position: Position) -> tuple[float, float] | None:
+        """The (low, high) excursion recorded for ``position``, if any.
+
+        Exposed for persistence. Pairs with :meth:`restore_excursions`.
+        """
+        return self._excursions.get(id(position))
+
+    def restore_excursions(self, position: Position, low: float, high: float) -> None:
+        """Reinstate a position's excursion bounds after reloading state.
+
+        MAE and MFE are the only trade statistics that cannot be recomputed from
+        a position's fields, because they depend on prices the position has
+        already lived through. Without this, a position that survived a restart
+        would report its excursions as if it had opened at the restart, making
+        every such trade look like it never went against the entry.
+        """
+        self._excursions[id(position)] = (float(min(low, high)), float(max(low, high)))
+
     def record_snapshot(
         self, timestamp: pd.Timestamp, prices: dict[str, float]
     ) -> PortfolioSnapshot:

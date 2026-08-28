@@ -58,6 +58,27 @@ def logs_dir() -> Path:
     return Path(override).resolve() if override else PROJECT_ROOT / "logs"
 
 
+def paper_state_dir() -> Path:
+    """Where paper-trading state files live.
+
+    Overridable with ``GTP_PAPER_STATE_DIR``. It sits under the data root by
+    default so a test's redirected root also redirects paper state.
+    """
+    override = os.environ.get("GTP_PAPER_STATE_DIR")
+    return Path(override).resolve() if override else data_root() / "paper"
+
+
+def paper_state_path(symbol: str, timeframe: str) -> Path:
+    """The canonical state file for one paper-trading session.
+
+    The runner and the dashboard both resolve the path through here. If they
+    each built their own, the dashboard would report NO_DATA while the runner was
+    happily trading into a different file, and the disagreement would look like a
+    bug in the engine.
+    """
+    return paper_state_dir() / f"{symbol.upper()}_{timeframe.upper()}.json"
+
+
 def ensure_dir(path: Path) -> Path:
     """Create ``path`` (and parents) if absent, then return it."""
     path.mkdir(parents=True, exist_ok=True)
