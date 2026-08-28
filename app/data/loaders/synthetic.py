@@ -13,6 +13,7 @@ cases, and sanity-checking that a strategy is *not* profitable on noise.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 
 import numpy as np
@@ -21,6 +22,24 @@ import pandas as pd
 from app.data.interfaces import MarketDataProvider
 from app.data.schema import MarketData, coerce_schema
 from app.utils.timeutils import Timeframe, normalize_timeframe, to_utc, utcnow
+
+
+def _symbol_offset(symbol: str) -> int:
+    """A stable per-symbol seed offset.
+
+    Deliberately *not* :func:`hash`. Python randomises the hash of a ``str`` per
+    interpreter process unless ``PYTHONHASHSEED`` is pinned, so seeding off
+    ``hash(symbol)`` made this provider emit a different series in every run -
+    while its docstring promised reproducibility. The failure was invisible
+    within a single process, which is where it was always tested, and showed up
+    as a paper replay that produced different trades on each invocation.
+
+    A digest of the symbol's bytes is stable across processes, machines and
+    Python versions, which is what "deterministic" has to mean for a replay
+    whose results anyone intends to compare.
+    """
+    digest = hashlib.blake2s(symbol.upper().encode("utf-8"), digest_size=4).digest()
+    return int.from_bytes(digest, "big") % 10_000
 
 
 class SyntheticProvider(MarketDataProvider):
@@ -95,7 +114,7 @@ class SyntheticProvider(MarketDataProvider):
 
         # Seed off the symbol too, so different instruments differ but each is
         # reproducible run to run.
-        rng = np.random.default_rng(self.seed + (hash(symbol.upper()) % 10_000))
+        rng = np.random.default_rng(self.seed + _symbol_offset(symbol))
 
         bars_per_year = (365.25 * 24 * 60) / tf.minutes
         dt = 1.0 / bars_per_year

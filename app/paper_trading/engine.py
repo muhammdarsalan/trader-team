@@ -27,7 +27,6 @@ flag or configuration that makes it do so.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +42,7 @@ from app.features.engine import FeatureEngine, FeatureSet
 from app.graph.state import TradingState
 from app.graph.workflow import TradingGraph
 from app.paper_trading.graph_view import build_graph_visualization
+from app.paper_trading.performance import build_performance
 from app.paper_trading.records import (
     STATE_SCHEMA_VERSION,
     assess_freshness,
@@ -154,6 +154,7 @@ class PaperTradingEngine:
             "bar_counter": 0,
             "bars_processed": 0,
             "bars_decided": 0,
+            "ambiguous_exits": 0,
             "last_processed_bar": None,
             "processed_bars": [],
             "pending_orders": [],
@@ -247,7 +248,7 @@ class PaperTradingEngine:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, self.state_path)
+        tmp.replace(self.state_path)
 
     def save_state(self, path: str | Path | None = None) -> dict[str, Any]:
         """Persist to ``path`` (or the configured path) and return the payload."""
@@ -275,7 +276,7 @@ class PaperTradingEngine:
         except (OSError, ValueError) as exc:
             quarantine = target.with_suffix(target.suffix + ".corrupt")
             try:
-                os.replace(target, quarantine)
+                target.replace(quarantine)
             except OSError:
                 quarantine = None
             self._state = self._blank_state()
@@ -364,6 +365,7 @@ class PaperTradingEngine:
     def _restore_positions(self, rows: list[dict[str, Any]]) -> None:
         for item in rows:
             try:
+                metadata = dict(item.get("metadata") or {})
                 position = Position(
                     symbol=item["symbol"],
                     direction=SignalDirection[str(item["direction"]).upper()],
@@ -376,7 +378,7 @@ class PaperTradingEngine:
                     entry_regime=item.get("entry_regime", "UNKNOWN"),
                     entry_costs=float(item.get("entry_costs", 0.0)),
                     risk_amount=float(item.get("risk_amount", 0.0)),
-                    metadata=dict(item.get("metadata") or {}),
+                    metadata=metadata,
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 self._record_error(
@@ -525,6 +527,33 @@ class PaperTradingEngine:
         self._state["recent_errors"] = recent[-MAX_RECENT_ERRORS:]
         logger.warning("Paper trading error recorded", extra={"node": node, "detail": message})
 
+    @staticmethod
+    def _read_quality(value: Any) -> tuple[str | None, dict[str, Any] | None]:
+        """Split a quality argument into its grade and its full report.
+
+        Callers may pass either the grade string or the
+        :class:`~app.data.validators.quality.DataQualityReport` itself. Accepting
+        the report matters: the grade alone tells a reader that a feed was graded
+        WARNING and not *why*, and the why is the whole point for the FX feeds -
+        an OHLC-bound defect in 3% of bars is a different fact from a single
+        stale bar, and only the findings distinguish them.
+        """
+        if value is None:
+            return None, None
+        if isinstance(value, str):
+            return value, None
+        status = getattr(value, "status", None)
+        to_dict = getattr(value, "to_dict", None)
+        if status is None:
+            return str(value), None
+        report = None
+        if callable(to_dict):
+            try:
+                report = jsonable(to_dict())
+            except Exception:  # noqa: BLE001 - a report that will not render is not fatal
+                report = None
+        return str(status), report
+
     # ------------------------------------------------------------- market data
 
     def refresh_market_data(
@@ -561,7 +590,10 @@ class PaperTradingEngine:
                 timeframe=timeframe,
                 error_type=type(exc).__name__,
             )
-            market = dict(self._state.get("market") or {})
+            # Built on the previous lane, so the last good bar and its grade
+            # stay visible - relabelled ERROR rather than blanked, because
+            # "we are showing you old data" is the useful statement.
+            market = {**self._blank_market(), **(self._state.get("market") or {})}
             market.update(
                 {
                     "symbol": symbol,
@@ -582,9 +614,16 @@ class PaperTradingEngine:
                 symbol=symbol,
                 timeframe=timeframe,
             )
-            market = dict(self._state.get("market") or {})
+            market = {**self._blank_market(), **(self._state.get("market") or {})}
             market.update(
-                {"symbol": symbol, "timeframe": timeframe, "status": "EMPTY", "rows": 0}
+                {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "status": "EMPTY",
+                    "rows": 0,
+                    "error": "The provider returned no bars.",
+                    "refresh_failed_at": utcnow().isoformat(),
+                }
             )
             self._state["market"] = self._decorate_market(market)
             return None
@@ -618,6 +657,31 @@ class PaperTradingEngine:
         )
         return result.data
 
+    def _blank_market(self, **overrides: Any) -> dict[str, Any]:
+        """The market lane with every field a consumer reads, explicitly empty.
+
+        A missing key and a null carry the same fact, but only the null survives
+        a caller that indexes rather than gets - and a KeyError in a monitoring
+        surface reads as a bug in the engine. ``quality_status`` defaults to
+        ``UNKNOWN`` rather than to None because that is the value the risk engine
+        will act on, and it refuses on it.
+        """
+        return {
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "status": "NO_DATA",
+            "rows": 0,
+            "quality_status": "UNKNOWN",
+            "quality": None,
+            "provider": None,
+            "source": None,
+            "first_bar": None,
+            "last_bar": None,
+            "last_close": None,
+            "error": None,
+            **overrides,
+        }
+
     def _decorate_market(self, market: dict[str, Any]) -> dict[str, Any]:
         """Attach freshness and the instrument's data caveat to a market summary.
 
@@ -646,16 +710,7 @@ class PaperTradingEngine:
         """The market lane, or an explicit NO_DATA marker when nothing is loaded."""
         market = self._state.get("market") or {}
         if not market:
-            return self._decorate_market(
-                {
-                    "symbol": self.symbol,
-                    "timeframe": self.timeframe,
-                    "status": "NO_DATA",
-                    "rows": 0,
-                    "quality_status": "UNKNOWN",
-                    "provider": None,
-                }
-            )
+            return self._decorate_market(self._blank_market())
         if "freshness" not in market:
             return self._decorate_market(market)
         return market
@@ -668,7 +723,8 @@ class PaperTradingEngine:
         *,
         timestamp: pd.Timestamp | None = None,
         features: FeatureSet | None = None,
-        data_quality: str | None = None,
+        data_quality: Any = None,
+        quality_report: dict[str, Any] | None = None,
         force: bool = False,
         persist: bool = True,
     ) -> dict[str, Any]:
@@ -678,6 +734,18 @@ class PaperTradingEngine:
         matching the backtester exactly. ``force`` re-runs a bar that was already
         processed; without it a repeat is skipped, which is what makes a restart
         that replays overlapping history safe.
+
+        Args:
+            market_data: the frame to read this bar from.
+            timestamp: the bar to process. Defaults to the frame's last bar.
+            features: precomputed causal features, truncated per bar internally.
+            data_quality: the grade this bar is sized against - a status string,
+                or the :class:`~app.data.validators.quality.DataQualityReport`
+                itself, in which case its findings are recorded too. Absent means
+                unverified, which the risk engine treats as a refusal.
+            quality_report: the findings, when the grade was passed separately.
+            force: re-run a bar that has already been processed.
+            persist: write state after this bar.
         """
         df = market_data.df
         if df.empty:
@@ -698,7 +766,9 @@ class PaperTradingEngine:
             }
 
         symbol = market_data.symbol
-        quality = data_quality or self._state.get("last_quality")
+        grade, report = self._read_quality(data_quality)
+        quality = grade or self._state.get("last_quality")
+        report = quality_report if quality_report is not None else report
 
         if features is None:
             features = self._features_for(market_data)
@@ -738,9 +808,9 @@ class PaperTradingEngine:
                 self._state["bars_decided"] = int(self._state.get("bars_decided", 0)) + 1
         else:
             reason = (
-                f"Bar {timestamp.date()} is inside the {features.warmup_bars}-bar feature "
-                "warm-up, so no decision was taken. Indicators are not yet defined and a "
-                "signal from them would be meaningless."
+                f"Bar {timestamp.date()} is inside the {self.warmup_bars(features)}-bar "
+                "feature warm-up, so no decision was taken. Indicators are not yet "
+                "defined and a signal from them would be meaningless."
             )
             self._state["latest_decision"] = "WARMUP"
             self._state["latest_state"] = build_decision_view(
@@ -757,7 +827,7 @@ class PaperTradingEngine:
         self._state["last_quality"] = quality or "UNKNOWN"
         self._state["last_close"] = close
         self._state["bars_processed"] = int(self._state.get("bars_processed", 0)) + 1
-        self._sync_market_from_frame(market_data, timestamp, quality)
+        self._sync_market_from_frame(market_data, timestamp, quality, report)
 
         if persist:
             self._persist()
@@ -768,7 +838,7 @@ class PaperTradingEngine:
         market_data: MarketData,
         *,
         features: FeatureSet | None = None,
-        data_quality: str | None = None,
+        data_quality: Any = None,
         persist_every: int = 250,
     ) -> list[dict[str, Any]]:
         """Replay every unprocessed bar in ``market_data``, oldest first.
@@ -781,6 +851,11 @@ class PaperTradingEngine:
         ``persist_every`` batches the state write. Writing after every bar during
         a long historical catch-up dominates the run for no benefit; the final
         state is always written.
+
+        ``data_quality`` takes either the grade or the whole
+        :class:`~app.data.validators.quality.DataQualityReport`. Prefer the
+        report: the dashboard shows the gate's findings, and a grade on its own
+        cannot say what was wrong with the feed.
         """
         if market_data.df.empty:
             self._record_error(
@@ -792,6 +867,10 @@ class PaperTradingEngine:
         if features is None:
             features = self._features_for(market_data)
 
+        # Split the grade from the report once, rather than per bar: the report
+        # can hold thousands of characters and every bar would re-serialise it.
+        grade, report = self._read_quality(data_quality)
+
         outputs: list[dict[str, Any]] = []
         pending_writes = 0
         for timestamp in market_data.df.index:
@@ -802,7 +881,8 @@ class PaperTradingEngine:
                     market_data,
                     timestamp=timestamp,
                     features=features,
-                    data_quality=data_quality,
+                    data_quality=grade,
+                    quality_report=report,
                     persist=False,
                 )
             )
@@ -838,6 +918,8 @@ class PaperTradingEngine:
                 "errors": list(self._state.get("recent_errors") or [])[-3:],
             }
 
+        # refresh_market_data already recorded the full report on the market
+        # lane; pass the grade so process_bar does not overwrite it with None.
         quality = self._state.get("last_quality")
         outputs = self.catch_up(data, data_quality=quality, persist_every=0)
         self._persist()
@@ -889,11 +971,28 @@ class PaperTradingEngine:
         atr = float(value)
         return atr if atr > 0 else None
 
-    @staticmethod
-    def _is_warm(features: FeatureSet | None, timestamp: pd.Timestamp) -> bool:
+    def warmup_bars(self, features: FeatureSet | None) -> int:
+        """Bars of history required before a decision is taken.
+
+        ``backtest.warmup_bars`` wins when set, exactly as in
+        :class:`app.backtest.engine.Backtester`. Reading it here is not an
+        aesthetic nicety: if the two engines resolved warm-up differently, an
+        operator who lengthened it to stabilise a backtest would find the paper
+        run still deciding on bars the backtest had discarded, and the two
+        results would stop being comparable without anything looking wrong.
+        """
+        configured = self.config.backtest.warmup_bars
+        if configured:
+            return int(configured)
+        return int(getattr(features, "warmup_bars", 0) or 0)
+
+    def _is_warm(self, features: FeatureSet | None, timestamp: pd.Timestamp) -> bool:
         if features is None:
             return False
-        return bool(features.is_warm_at(timestamp))
+        df = getattr(features, "df", None)
+        if df is None or timestamp not in df.index:
+            return False
+        return int(df.index.get_loc(timestamp)) >= self.warmup_bars(features)
 
     def _fill_pending_orders(
         self,
@@ -990,6 +1089,12 @@ class PaperTradingEngine:
                     "slippage": float(fill.slippage_cost),
                     "commission": float(fill.commission),
                     "intended_risk": pending.get("risk_amount"),
+                    # Survives into Trade.metadata, and from there into the
+                    # persisted record as meta_contributing, so the performance
+                    # table can attribute an ensemble trade to the strategies
+                    # that voted for it.
+                    "contributing": list(pending.get("contributing") or []),
+                    "aggregation_method": pending.get("aggregation_method"),
                 },
             )
             self.portfolio.open_position(position, fill)
@@ -1072,10 +1177,24 @@ class PaperTradingEngine:
             # its weighting free of future information.
             self.performance.record_trade(trade.strategy, trade.entry_regime, trade.r_multiple)
 
-            self._append_bounded("closed_trades", jsonable(trade.to_dict()), MAX_CLOSED_TRADES)
+            ambiguous = bool(getattr(event, "ambiguous", False))
+            if ambiguous:
+                # The bar's range contained both the stop and the target, and
+                # OHLC cannot say which was touched first. The simulator resolves
+                # it per execution.same_bar_resolution; recording the fact means
+                # a reader can see which trades rest on that assumption rather
+                # than on observed sequence.
+                self._state["ambiguous_exits"] = (
+                    int(self._state.get("ambiguous_exits") or 0) + 1
+                )
+
+            record = jsonable(trade.to_dict())
+            record["ambiguous_bar"] = ambiguous
+            self._append_bounded("closed_trades", record, MAX_CLOSED_TRADES)
             exit_fill = serialise_fill(fill, timestamp)
             exit_fill["exit_reason"] = str(event.reason)
             exit_fill["closes_position"] = True
+            exit_fill["ambiguous_bar"] = ambiguous
             self._append_bounded("fills", exit_fill, MAX_RECENT_FILLS)
             self._record_event(
                 "paper_exit",
@@ -1085,6 +1204,13 @@ class PaperTradingEngine:
                     f" ({trade.r_multiple:+.2f}R)."
                     if trade.r_multiple is not None
                     else " (R multiple undefined)."
+                )
+                + (
+                    " This bar's range contained both the stop and the target, so which "
+                    f"came first is unknowable from OHLC; resolved as "
+                    f"{self.config.execution.same_bar_resolution}."
+                    if ambiguous
+                    else ""
                 ),
                 symbol=trade.symbol,
                 strategy=trade.strategy,
@@ -1092,6 +1218,7 @@ class PaperTradingEngine:
                 net_pnl=float(trade.net_pnl),
                 r_multiple=trade.r_multiple,
                 bars_held=bars_held,
+                ambiguous_bar=ambiguous,
             )
 
     def _decide_on_bar(
@@ -1190,6 +1317,12 @@ class PaperTradingEngine:
             f"{order.symbol}:{order.side}:{timestamp.isoformat()}:"
             f"{order.quantity:.10g}:{order.strategy}"
         )
+        # Which strategies actually voted for this trade. The aggregator hands
+        # risk a single signal named "ensemble", so without carrying the
+        # contributors through, every paper trade is attributed to "ensemble"
+        # and a per-strategy performance table says nothing at all.
+        signal_meta = dict(getattr(signal, "metadata", None) or {})
+        contributing = [str(name) for name in (signal_meta.get("contributing") or [])]
         pending = {
             "fill_key": order_key,
             "symbol": order.symbol,
@@ -1203,6 +1336,10 @@ class PaperTradingEngine:
             "take_profit": None if signal.take_profit is None else float(signal.take_profit),
             "risk_amount": None if risk is None else float(risk.risk_amount),
             "regime": str(self._state.get("last_regime") or "UNKNOWN"),
+            "contributing": contributing,
+            "aggregation_method": (
+                None if signal_meta.get("method") is None else str(signal_meta["method"])
+            ),
             "metadata": jsonable(order.metadata),
         }
         self._state["pending_orders"] = [pending]
@@ -1264,7 +1401,11 @@ class PaperTradingEngine:
             self.portfolio.snapshots = self.portfolio.snapshots[-MAX_EQUITY_POINTS:]
 
     def _sync_market_from_frame(
-        self, market_data: MarketData, timestamp: pd.Timestamp, quality: str | None
+        self,
+        market_data: MarketData,
+        timestamp: pd.Timestamp,
+        quality: str | None,
+        quality_report: dict[str, Any] | None = None,
     ) -> None:
         """Record the market lane for a replayed bar.
 
@@ -1279,10 +1420,13 @@ class PaperTradingEngine:
             market = dict(existing)
             market["last_bar"] = timestamp.isoformat()
             market["last_close"] = self._last_close
+            if quality_report is not None:
+                market["quality"] = quality_report
             self._state["market"] = self._decorate_market(market)
             return
 
         df = market_data.df
+        previous = existing.get("quality") if isinstance(existing, dict) else None
         self._state["market"] = self._decorate_market(
             {
                 "symbol": market_data.symbol,
@@ -1295,6 +1439,10 @@ class PaperTradingEngine:
                 "frame_last_bar": iso(df.index[-1]),
                 "last_close": self._last_close,
                 "quality_status": str(quality or "UNKNOWN"),
+                # The gate's findings, not just its verdict. Carried forward from
+                # the previous bar when this one supplied none, so a mid-replay
+                # bar does not blank a report the run already established.
+                "quality": quality_report if quality_report is not None else previous,
                 "provider": market_data.provider,
             }
         )
@@ -1379,63 +1527,100 @@ class PaperTradingEngine:
     def system_health(self) -> dict[str, Any]:
         """An honest health verdict.
 
-        Health is derived from three separate questions - has anything run, is
-        the data current, and did anything fail - because they fail
-        independently. The previous version reported ``HEALTHY`` whenever the
-        error list happened to be empty, which meant an engine that had never
-        processed a bar and held no data at all described itself as healthy.
+        Health is derived from four independent questions - has anything run, did
+        the last refresh succeed, is the data current, and did anything fail -
+        because they fail independently. An earlier version reported ``HEALTHY``
+        whenever the error list happened to be empty, which meant an engine that
+        had never processed a bar and held no data at all described itself as
+        healthy.
+
+        The severity is the *worst* of the findings rather than whichever check
+        ran last, and the "nothing has run yet" note is suppressed when a more
+        specific failure explains why: telling an operator to run a catch-up is
+        unhelpful when the catch-up is exactly what just failed.
         """
         market = self.market_summary()
         freshness = market.get("freshness") or {}
         quality = str(market.get("quality_status", "UNKNOWN"))
         errors = list(self._state.get("recent_errors") or [])
         bars = int(self._state.get("bars_processed") or 0)
+        market_status = str(market.get("status", "NO_DATA"))
 
-        reasons: list[str] = []
-        status = "HEALTHY"
+        # Ordered worst-first so `max` over this ranking cannot be defeated by
+        # the order the checks happen to run in.
+        rank = {"HEALTHY": 0, "IDLE": 1, "DEGRADED": 2, "FAILED": 3}
+        findings: list[tuple[str, str]] = []
 
-        if market.get("status") in {"NO_DATA", "EMPTY"} or bars == 0:
-            status = "IDLE"
-            reasons.append(
+        if market_status == "ERROR":
+            findings.append((
+                "DEGRADED",
+                f"The last market-data refresh failed: {market.get('error')}. Any figures "
+                "shown come from the previous successful load, not from a current feed.",
+            ))
+        elif market_status == "EMPTY":
+            findings.append((
+                "DEGRADED",
+                "The provider returned no bars on the last refresh. Nothing was processed "
+                "and the previous data is unchanged.",
+            ))
+
+        if market_status == "NO_DATA" or bars == 0:
+            findings.append((
+                "IDLE",
                 "No bar has been processed yet, so there is no state to report on. "
-                "Run a catch-up or a live tick first."
-            )
-        if market.get("status") == "ERROR":
-            status = "DEGRADED"
-            reasons.append(
-                f"The last market-data refresh failed: {market.get('error')}. Displayed "
-                "data is from the previous successful load."
-            )
-        if freshness.get("status") == "STALE":
-            status = "DEGRADED"
-            reasons.append(f"Market data is stale. {freshness.get('detail')}")
-        elif freshness.get("status") == "UNKNOWN" and bars:
-            status = "DEGRADED"
-            reasons.append(f"Market-data age could not be established. {freshness.get('detail')}")
+                "Run a catch-up or a live tick first.",
+            ))
+
+        if bars:
+            if freshness.get("status") == "STALE":
+                findings.append(("DEGRADED", f"Market data is stale. {freshness.get('detail')}"))
+            elif freshness.get("status") == "UNKNOWN":
+                findings.append((
+                    "DEGRADED",
+                    f"Market-data age could not be established. {freshness.get('detail')}",
+                ))
+
         if quality == "FAIL":
-            status = "DEGRADED"
-            reasons.append(
-                "The data-quality gate graded this feed FAIL. Risk will refuse to size "
-                "against it."
-            )
+            findings.append((
+                "DEGRADED",
+                "The data-quality gate graded this feed FAIL. Risk refuses to size against "
+                "it, so no new position will be opened.",
+            ))
         elif quality == "UNKNOWN" and bars:
-            status = "DEGRADED"
-            reasons.append(
-                "Data quality is unverified. The risk engine treats an unstated grade as "
-                "a refusal rather than as a pass."
-            )
+            findings.append((
+                "DEGRADED",
+                "Data quality is unverified. The risk engine treats an unstated grade as a "
+                "refusal rather than as a pass.",
+            ))
         elif quality == "WARNING":
-            reasons.append(
-                "The data-quality gate graded this feed WARNING. Whether that blocks "
-                "trading depends on block_on_data_quality_warning in configs/risk.yaml."
-            )
+            findings.append((
+                "DEGRADED" if self.config.risk.block_on_data_quality_warning else "HEALTHY",
+                "The data-quality gate graded this feed WARNING. "
+                + (
+                    "block_on_data_quality_warning is set, so no new position is opened."
+                    if self.config.risk.block_on_data_quality_warning
+                    else "block_on_data_quality_warning is false in configs/risk.yaml, so "
+                    "trading continues on caveated data - read the quality findings before "
+                    "reading anything into a result."
+                ),
+            ))
+
         if errors:
-            if status == "HEALTHY":
-                status = "DEGRADED"
-            reasons.append(
-                f"{len(errors)} error(s) recorded; most recent: {errors[-1].get('error')}"
-            )
-        if status == "HEALTHY":
+            findings.append((
+                "DEGRADED",
+                f"{len(errors)} error(s) recorded; most recent: {errors[-1].get('error')}",
+            ))
+
+        status = max((f[0] for f in findings), key=lambda s: rank.get(s, 0), default="HEALTHY")
+
+        # A specific failure explains the situation better than "nothing has run".
+        specific = any(level != "IDLE" for level, _ in findings)
+        reasons = [
+            message
+            for level, message in findings
+            if not (level == "IDLE" and specific) and message
+        ]
+        if status == "HEALTHY" and not reasons:
             reasons.append(
                 f"{bars:,} bars processed, data {freshness.get('status', 'UNKNOWN')}, "
                 f"quality {quality}, no errors recorded."
@@ -1447,13 +1632,34 @@ class PaperTradingEngine:
             "data_freshness": freshness.get("status", "UNKNOWN"),
             "freshness_detail": freshness.get("detail"),
             "quality_status": quality,
+            "market_status": market_status,
             "bars_processed": bars,
             "bars_decided": int(self._state.get("bars_decided") or 0),
+            "ambiguous_exits": int(self._state.get("ambiguous_exits") or 0),
             "error_count": len(errors),
             "trading_enabled": self.trading_enabled,
             "live_trading_enabled": False,
             "mode": str(self.config.platform.mode),
         }
+
+    def performance_view(self) -> dict[str, Any]:
+        """Realised performance by strategy and by regime.
+
+        Built from the persisted closed-trade log and the selector's own
+        performance table. Both are shown because they can legitimately differ:
+        the trade log is bounded (see :data:`MAX_CLOSED_TRADES`) while the
+        selector's samples are not trimmed, so on a long session the selector
+        can be weighting on trades that have aged out of the log.
+        """
+        return build_performance(
+            list(self._state.get("closed_trades") or []),
+            selector_records=[
+                {"strategy": strategy, "regime": regime, "r_multiples": list(samples)}
+                for (strategy, regime), samples in sorted(self.performance.records.items())
+            ],
+            min_samples=int(self.performance.min_samples),
+            open_positions=len(self.portfolio.positions),
+        )
 
     def dashboard_data(self) -> dict[str, Any]:
         """Everything the dashboard renders, in one JSON-safe payload.
@@ -1505,6 +1711,7 @@ class PaperTradingEngine:
             "fills": list(self._state.get("fills") or [])[-20:],
             "trades": list(self._state.get("closed_trades") or [])[-20:],
             "equity_curve": self.equity_curve(),
+            "performance": self.performance_view(),
             "graph": graph,
             "system_health": self.system_health(),
             "events": list(self._state.get("recent_events") or [])[-25:],

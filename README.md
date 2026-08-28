@@ -31,8 +31,10 @@ It exists to answer one question scientifically:
 
 ## Status
 
-**Phases 1–4 of 5 complete** — data, features, strategies, graph, risk,
-execution, backtesting, and the validation machinery that tries to break it all.
+**Phases 1–4 complete; phase 5 paper trading and dashboard complete.** Data,
+features, strategies, graph, risk, execution, backtesting, the validation
+machinery that tries to break it all, and a restartable paper-trading session
+with a monitoring dashboard over it.
 
 | Phase | Scope | State |
 |---|---|---|
@@ -40,17 +42,29 @@ execution, backtesting, and the validation machinery that tries to break it all.
 | 2 | Features, regime detection, 5 strategies, signals | ✅ Complete |
 | 3 | LangGraph workflow, selector, risk, execution, backtester | ✅ Complete |
 | 4 | Walk-forward, OOS, Monte Carlo, robustness, experiment DB | ✅ Complete |
-| 5 | Paper trading, Streamlit dashboard, docs | ✅ Session 2 implemented |
+| 5 | Paper trading engine, Streamlit dashboard, docs | ✅ Paper trading + dashboard complete |
 
 What works today: download and validate 26 years of daily OHLCV across six
 instruments; compute a causal feature panel; classify market regimes; run five
 independent strategies through a LangGraph decision graph; weight them by
 regime and measured performance; size positions against a full set of risk
 limits; simulate fills with spread, slippage, commission and gaps; produce a
-reproducible backtest with a complete trade and no-trade log; and then subject
-that configuration to strict out-of-sample testing, walk-forward analysis,
+reproducible backtest with a complete trade and no-trade log; subject that
+configuration to strict out-of-sample testing, walk-forward analysis,
 Monte Carlo resampling of the trade sequence, parameter-neighbourhood sweeps and
-data-snooping arithmetic, with every study recorded under a reproducible id.
+data-snooping arithmetic, with every study recorded under a reproducible id; and
+run a restartable paper-trading session — over replayed history or a refreshed
+vendor feed — through the *same* execution model as the backtester, with a
+dashboard that shows the regime, every strategy's vote, the risk verdict, the
+decision graph and the realised result.
+
+**The paper engine is not a second backtester.** It drives the same simulator,
+risk engine, graph and portfolio through the same per-bar sequence, and a test
+compares every field of every trade the two produce over one frame. A divergence
+there would be invisible otherwise: both would keep producing plausible numbers.
+
+Remaining for phase 5: research/paper integration, the final robustness and
+presentation pass, and end-to-end release documentation.
 
 **No profitability claim is made anywhere in this project.** The backtester
 reports what happened on one historical sample, warnings included. On the
@@ -109,9 +123,25 @@ python scripts/run_research.py --list-experiments
 # Run the tests
 pytest -m "not network"
 
+# Paper-trade over replayed history (deterministic, no network once cached)
+python scripts/run_paper_trading.py --symbol XAUUSD --timeframe 1D --start 2012-01-01
+
+# Fetch the newest bars and process whatever has not been seen
+python scripts/run_paper_trading.py --symbol XAUUSD --timeframe 1D --live
+
+# Paper-trade your own file: drop data/raw/XAUUSD_1D.csv, then
+python scripts/run_paper_trading.py --symbol XAUUSD --timeframe 1D --provider csv
+
+# Inspect a saved session without advancing it
+python scripts/run_paper_trading.py --symbol XAUUSD --timeframe 1D --status
+
 # Launch the paper-trading dashboard
 streamlit run dashboard/streamlit_app.py
 ```
+
+Paper trading is simulation. The kill switch (`platform.trading_enabled`) ships
+**false**, so no order is created until you turn it on, and even then no broker
+is contacted — see [docs/paper_trading.md](docs/paper_trading.md).
 
 In code:
 
@@ -147,8 +177,9 @@ app/backtest/   event-driven engine, metrics, provenance
                          ↓
 app/research/   splits, walk-forward, Monte Carlo, robustness,
                 overfitting diagnostics, SQLite experiment store
-app/paper_trading/                                         [phase 5]
-dashboard/      Streamlit UI                               [phase 5]
+app/paper_trading/  restartable paper session, graph view, performance
+dashboard/          Streamlit monitoring UI (shaping in view.py, rendering only
+                    in streamlit_app.py, so the page is testable)
 ```
 
 Design rules the codebase holds to:
@@ -209,7 +240,13 @@ Two limitations that materially affect research, documented in full in
    with impossible OHLC relationships, and the quality gate fails it on purpose.
 
 Bring your own data any time: drop `data/raw/<SYMBOL>_<TIMEFRAME>.csv` and pass
-`--provider csv`. Strategies and the backtester are unaffected.
+`--provider csv`. Strategies, the backtester and the paper runner are all
+unaffected.
+
+Both caveats travel with the data rather than living in one display, so every
+surface that shows a price for a proxy series shows that it is a proxy — the
+persisted paper state, the `--status` output, the decision graph's market node
+and the first banner on the dashboard.
 
 ---
 
@@ -229,9 +266,11 @@ detection, the Signal contract, all five strategies, graph routing and error
 isolation, signal aggregation and conflicts, position sizing and every risk
 limit, order fills, slippage, spread, gaps, backtest causality, temporal splits,
 the walk-forward selection rule, Monte Carlo resampling, parameter sweeps,
-overfitting arithmetic and the experiment store.
+overfitting arithmetic, the experiment store, the paper-trading loop and its
+persistence, and the dashboard — including a headless render of the actual
+Streamlit page.
 
-Five families of test carry unusual weight:
+Eight families of test carry unusual weight:
 
 - **Causality.** `assert_causal` recomputes a feature on a truncated series and
   compares the overlap; any difference proves future data was used. It covers
@@ -252,6 +291,22 @@ Five families of test carry unusual weight:
   reconstructible from that fold's training scores alone. Selection informed by
   the test window turns the whole analysis into an in-sample result and changes
   nothing visible about the report.
+- **Paper trading and the backtester must agree.** Both are driven over one
+  frame and every field of every shared trade is compared. They are two drivers
+  of one execution model; if they diverged, both would keep producing plausible
+  numbers and only this comparison would show they had stopped describing the
+  same system.
+- **A restart must change nothing.** A run split across a process boundary is
+  compared, field by field, with one that never stopped — trades, cash, costs,
+  the drawdown peak and the selector's measured performance. A restart bug never
+  looks like an error: the drawdown peak resets and silently *widens* the risk
+  limit, or excursions restart and every surviving trade reports that it never
+  went against its entry.
+- **Nothing may be fabricated.** An engine with no data must report `IDLE`, must
+  colour no stage as having run, and must not present a starting balance as a
+  measurement. Health was once reported `HEALTHY` whenever the error list
+  happened to be empty, so an engine holding no data at all described itself as
+  healthy while every stage of the graph showed green.
 
 ---
 
@@ -290,6 +345,7 @@ experiments/    experiment records  (gitignored)
 - [docs/graph_engine.md](docs/graph_engine.md) — the LangGraph workflow, state, routing, error isolation
 - [docs/backtesting.md](docs/backtesting.md) — bar ordering, execution realism, risk limits, metrics
 - [docs/research.md](docs/research.md) — validation, walk-forward, overfitting, experiment tracking
+- [docs/paper_trading.md](docs/paper_trading.md) — the paper session, persistence, the dashboard, the graph view
 - [docs/architecture.md](docs/architecture.md) — design decisions and rationale
 
 ---
