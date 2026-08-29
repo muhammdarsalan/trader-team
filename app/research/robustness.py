@@ -220,6 +220,45 @@ class ParameterSensitivity:
             ]
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialisable form, for the machine-readable report.
+
+        ``fragile`` and ``baseline_is_peak`` travel with the numbers rather than
+        being left for a reader to re-derive: they are the two findings a
+        sensitivity sweep exists to produce, and a consumer that had to
+        recompute them from the grid could reach a different threshold than the
+        one the study actually applied.
+        """
+        return {
+            "parameter": self.parameter,
+            "baseline_value": self.baseline_value,
+            "objective_name": self.objective_name,
+            "mean": self.mean,
+            "std": self.std,
+            "coefficient_of_variation": (
+                self.coefficient_of_variation
+                if math.isfinite(self.coefficient_of_variation)
+                else None
+            ),
+            "positive_fraction": self.positive_fraction,
+            "worst_adjacent_drop": self.worst_adjacent_drop,
+            "baseline_is_peak": self.baseline_is_peak,
+            "fragile": self.fragile,
+            "notes": list(self.notes),
+            "points": [
+                {
+                    "value": p.value,
+                    "is_baseline": p.is_baseline,
+                    "objective": p.objective if p.usable else None,
+                    "trades": p.metrics.total_trades,
+                    "expectancy_r": p.metrics.expectancy_r,
+                    "max_drawdown": p.metrics.max_drawdown,
+                    "error": p.error,
+                }
+                for p in self.points
+            ],
+        }
+
 
 @dataclass
 class RobustnessReport:
@@ -237,6 +276,15 @@ class RobustnessReport:
         if not self.sensitivities:
             return pd.DataFrame()
         return pd.concat([s.to_frame() for s in self.sensitivities], ignore_index=True)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialisable form, for the machine-readable report."""
+        return {
+            "segment": self.segment,
+            "objective_name": self.objective_name,
+            "fragile_parameters": list(self.fragile_parameters),
+            "sensitivities": [s.to_dict() for s in self.sensitivities],
+        }
 
     def render(self) -> str:
         width = 60

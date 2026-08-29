@@ -273,6 +273,7 @@ is asserted, and an assertion cannot pass on a correctly-formatted wrong number.
 | Portfolio | Where does the book stand — equity, realised and unrealised P&L, drawdown, open positions, recent trades? |
 | Execution | What did the simulated fills cost, broken into spread, slippage and commission? |
 | Performance | Of the closed trades, how did they turn out by strategy and by regime? |
+| Research | Has this configuration been validated, and what did the study conclude? |
 | Graph | How far did this bar get through the pipeline, and what stopped it? |
 | Activity | What has happened, and what has failed? |
 
@@ -300,6 +301,27 @@ the trade, and the panel breaks results down by contributor. A trade appears
 under every strategy that voted for it, so those rows do **not** sum to the
 portfolio's P&L — read each on its own: *of the trades this strategy argued for,
 this is how they turned out.*
+
+### Research context, or its absence
+
+The Research tab reads the validation study for this instrument from
+`reports/validation/`. It shows the verdict, in-sample against out-of-sample
+windows with what each supports, walk-forward folds, parameter robustness,
+correlation findings, overfitting diagnostics, recommendations and full
+experiment provenance — and an evidence summary separating what has been
+established from what has not.
+
+When there is no study, the panel is **empty and says why**, including the
+command that would produce one. It does not render zeros. A research panel
+showing zeros for a study that was never run reads as "tested, found nothing",
+which is a much stronger claim than "never tested", and nothing about a table of
+zeros distinguishes the two. The same applies when the only study on disk is for
+a different instrument, was run under a different configuration fingerprint
+(`STALE`), or cannot be parsed (`UNREADABLE`) — each is a different fact and
+only one of them is fixed by running a study.
+
+Nothing on that tab is applied to the running configuration. See
+[research.md](research.md#the-gate) for the gate, which ships closed.
 
 ### Health is derived, not assumed
 
@@ -348,7 +370,18 @@ through. Conflating the two once made a fully-completed decision report that
 
 `path` is the trunk stages reached, in order. `stopped_at` and `stopped_reason`
 name where the bar ended and why — a warm-up skip, an aggregate that declined, a
-risk refusal, the kill switch. The view distinguishes:
+risk refusal, the kill switch.
+
+The reason has to be the one that actually operated. A bar that ended at
+aggregation did not reach execution, so the execution node stays `PENDING` even
+when the kill switch is off; it notes the switch as a standing condition rather
+than claiming it stopped this bar. The switch earns a red `BLOCKED` node only
+once risk has run — and when it stops an actionable signal, the risk engine
+records `KILL_SWITCH` and the *risk* node carries it. Before this, the shipped
+default (switch off) drew every `WAIT` bar as blocked-by-kill-switch, which made
+"no signal" and "execution off" indistinguishable and showed the wrong one.
+
+The view distinguishes:
 
 - **active** nodes — on the path to a paper trade
 - **suppressed** strategies — they signalled, and the selector weighted them to

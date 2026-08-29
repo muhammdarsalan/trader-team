@@ -35,6 +35,7 @@ __all__ = [
     "portfolio_panel",
     "quality_rows",
     "regime_panel",
+    "research_panel",
     "safety_banners",
     "strategy_rows",
     "trade_rows",
@@ -834,6 +835,19 @@ def trade_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _profit_factor_display(factor: float | None, trades: int | None) -> str:
+    """Format a profit factor, distinguishing "no losses" from "no trades".
+
+    ``build_performance`` returns ``None`` for both, because dividing by zero
+    losses has no answer either way. Rendering both as "no losses in sample"
+    told a reader with an empty book that trades had happened and none had
+    lost. An unmeasured quantity has to read as unmeasured.
+    """
+    if factor is not None:
+        return f"{factor:.2f}"
+    return "n/a - no closed trades" if not trades else "no losses in sample"
+
+
 def performance_panel(data: dict[str, Any]) -> dict[str, Any]:
     """Realised performance by strategy and by regime.
 
@@ -863,9 +877,7 @@ def performance_panel(data: dict[str, Any]) -> dict[str, Any]:
             "net_pnl": source.get("net_pnl"),
             "net_display": _money(source.get("net_pnl"), currency),
             "profit_factor": factor,
-            "profit_factor_display": (
-                "no losses in sample" if factor is None else f"{factor:.2f}"
-            ),
+            "profit_factor_display": _profit_factor_display(factor, source.get("trades")),
             "costs": source.get("costs"),
             "avg_bars_held": source.get("avg_bars_held"),
             "ambiguous_exits": source.get("ambiguous_exits"),
@@ -934,9 +946,9 @@ def performance_panel(data: dict[str, Any]) -> dict[str, Any]:
             _metric(
                 "Profit factor",
                 overall.get("profit_factor"),
-                "no losses in sample"
-                if overall.get("profit_factor") is None
-                else f"{overall['profit_factor']:.2f}",
+                _profit_factor_display(
+                    overall.get("profit_factor"), overall.get("trades")
+                ),
             ),
             _metric(
                 "Net realised",
@@ -974,6 +986,290 @@ def performance_panel(data: dict[str, Any]) -> dict[str, Any]:
         "selector_table": selector_rows,
         "min_samples": perf.get("min_samples"),
     }
+
+
+def research_panel(data: dict[str, Any]) -> dict[str, Any]:
+    """What validation says about the configuration this session is running.
+
+    The hardest requirement here is the negative one: when there is no study, or
+    the study describes a different configuration, the panel must say so in
+    words and show nothing else. A research section that silently rendered
+    zeros would read as "tested, found nothing", which is a different and much
+    stronger claim than "never tested".
+
+    The second is that in-sample, validation and out-of-sample numbers are kept
+    in labelled, separate rows and never summed, averaged or headlined together.
+    They are the same arithmetic on different bars, and only the label
+    distinguishes them.
+    """
+    context = data.get("research") or {}
+    availability = str(context.get("availability", "MISSING")).upper()
+    available = availability == "AVAILABLE"
+    report = context.get("report") or {}
+
+    panel: dict[str, Any] = {
+        "available": available,
+        "availability": availability,
+        "reason": context.get("reason", "No research context was supplied."),
+        "tone": {"AVAILABLE": "ok", "MISSING": "warn", "STALE": "warn", "UNREADABLE": "error"}
+        .get(availability, "warn"),
+        "experiment_id": context.get("experiment_id"),
+        "report_path": context.get("report_path"),
+        "other_experiments": list(context.get("other_experiments") or []),
+        "evidence_ladder": list(context.get("evidence_ladder") or []),
+        "segments": [],
+        "verdict": None,
+        "verdict_reasons": [],
+        "walk_forward": None,
+        "monte_carlo": None,
+        "robustness": None,
+        "correlation": None,
+        "overfitting": None,
+        "recommendations": [],
+        "recommendation_note": None,
+        "evidence_summary": [],
+        "provenance": {},
+        "metrics": [],
+    }
+
+    if not available:
+        # Deliberately returns here. Every field above is empty, and the caller
+        # renders the reason instead of a table of nothing.
+        return panel
+
+    panel["evidence_summary"] = [
+        {
+            "category": row.get("category"),
+            "status": row.get("status"),
+            "detail": row.get("detail"),
+            "limitation": row.get("limitation"),
+            "tone": {
+                "NOT_ESTABLISHED": "error",
+                "NOT_ASSESSED": "warn",
+                "PARTIAL": "warn",
+                "SEPARATE QUESTION": "info",
+            }.get(str(row.get("status")), "neutral"),
+        }
+        for row in report.get("evidence_summary") or []
+    ]
+
+    verdict = report.get("verdict")
+    panel["verdict"] = verdict
+    panel["verdict_reasons"] = list(report.get("verdict_reasons") or [])
+    panel["verdict_tone"] = {
+        "SURVIVED THIS ROUND OF TESTING": "ok",
+        "INCONCLUSIVE": "warn",
+        "INSUFFICIENT EVIDENCE": "warn",
+        "EVIDENCE AGAINST": "error",
+    }.get(str(verdict), "neutral")
+
+    # --- windows, each labelled with what it can support ---------------------
+    supports = {
+        "in_sample": "describes the bars the configuration was built from - no evidence",
+        "validation": "one held-out window, consulted during development - weak",
+        "out_of_sample": "seen once, never used for a decision - the evidence that counts",
+    }
+    for row in report.get("segments") or []:
+        name = str(row.get("segment"))
+        panel["segments"].append(
+            {
+                "segment": name,
+                "role": row.get("role"),
+                "supports": supports.get(name, "an additional window"),
+                "is_out_of_sample": name == "out_of_sample",
+                "bars": row.get("bars"),
+                "trades": row.get("trades"),
+                "total_return": row.get("total_return"),
+                "return_display": _pct(row.get("total_return")),
+                "expectancy_r": row.get("expectancy_r"),
+                "expectancy_display": (
+                    "n/a"
+                    if row.get("expectancy_r") is None
+                    else f"{row['expectancy_r']:+.3f}R"
+                ),
+                "max_drawdown": row.get("max_drawdown"),
+                "drawdown_display": _pct(row.get("max_drawdown")),
+                "sharpe": row.get("sharpe"),
+                "win_rate_display": _pct(row.get("win_rate"), 0),
+                "data_quality": row.get("data_quality"),
+                "quality_tone": _tone(row.get("data_quality")),
+            }
+        )
+
+    oos = next((s for s in panel["segments"] if s["is_out_of_sample"]), None)
+
+    wf = report.get("walk_forward")
+    if wf:
+        folds = wf.get("folds") or 0
+        panel["walk_forward"] = {
+            "folds": folds,
+            "profitable_folds": wf.get("profitable_folds"),
+            "profitable_display": (
+                f"{wf.get('profitable_folds', 0)} of {folds}" if folds else "no folds"
+            ),
+            "efficiency": wf.get("efficiency"),
+            "stitched": wf.get("stitched") or {},
+            "warnings": list(wf.get("warnings") or []),
+        }
+
+    mc = report.get("monte_carlo")
+    if mc:
+        panel["monte_carlo"] = mc
+
+    robustness = report.get("robustness")
+    if robustness:
+        fragile = list(robustness.get("fragile_parameters") or [])
+        panel["robustness"] = {
+            "objective": robustness.get("objective_name"),
+            "measured_on": robustness.get("segment"),
+            "fragile_parameters": fragile,
+            "rows": [
+                {
+                    "parameter": s.get("parameter"),
+                    "fragile": bool(s.get("fragile")),
+                    "baseline_is_peak": bool(s.get("baseline_is_peak")),
+                    "spread": s.get("coefficient_of_variation"),
+                    "spread_display": (
+                        "n/a"
+                        if s.get("coefficient_of_variation") is None
+                        else f"{s['coefficient_of_variation']:.2f}"
+                    ),
+                    "verdict": "FRAGILE" if s.get("fragile") else "stable",
+                    "tone": "error" if s.get("fragile") else "ok",
+                }
+                for s in robustness.get("sensitivities") or []
+            ],
+        }
+
+    correlation = report.get("correlation")
+    if correlation:
+        panel["correlation"] = {
+            "threshold": correlation.get("threshold"),
+            "measured_on": correlation.get("segment"),
+            "trades_per_strategy": dict(correlation.get("trades_per_strategy") or {}),
+            "findings": [
+                {
+                    "pair": f"{f.get('strategy_a')} / {f.get('strategy_b')}",
+                    "return_correlation": f.get("return_correlation"),
+                    "correlation_display": (
+                        "n/a"
+                        if f.get("return_correlation") is None
+                        else f"{f['return_correlation']:+.2f}"
+                    ),
+                    "signal_agreement": f.get("signal_agreement"),
+                    "agreement_display": _pct(f.get("signal_agreement"), 0),
+                    "observations": f.get("observations"),
+                    "hypothesis": f.get("hypothesis"),
+                }
+                for f in correlation.get("findings") or []
+            ],
+        }
+
+    overfitting = report.get("overfitting")
+    if overfitting:
+        findings = overfitting.get("findings") or []
+        panel["overfitting"] = {
+            "trials": overfitting.get("trials"),
+            "deflated_sharpe": overfitting.get("deflated_sharpe"),
+            "findings": [
+                {
+                    "code": f.get("code"),
+                    "severity": str(f.get("severity", "")).upper(),
+                    "message": f.get("message"),
+                    "tone": {"SEVERE": "error", "WARNING": "warn"}.get(
+                        str(f.get("severity", "")).upper(), "neutral"
+                    ),
+                }
+                for f in findings
+            ],
+            "severe_count": sum(
+                1 for f in findings if str(f.get("severity", "")).upper() == "SEVERE"
+            ),
+        }
+
+    recommendations = report.get("recommendations") or {}
+    panel["recommendations"] = [
+        {
+            "subject": r.get("subject"),
+            "action": r.get("action"),
+            "evidence_tier": r.get("evidence_tier"),
+            "strategy": r.get("strategy"),
+            "proposed_weight": r.get("proposed_weight"),
+            "applicable": bool(r.get("applicable")),
+            "rationale": list(r.get("rationale") or []),
+            "blockers": list(r.get("blockers") or []),
+            "tone": "ok" if r.get("applicable") else "neutral",
+        }
+        for r in recommendations.get("recommendations") or []
+    ]
+    panel["recommendation_note"] = (
+        "A recommendation is a reading of what was measured. None of these has been "
+        "applied to the running configuration: research.feedback.enabled governs that "
+        "and ships false."
+    )
+
+    panel["provenance"] = {
+        "experiment_id": report.get("experiment_id"),
+        "created_at": report.get("created_at"),
+        "period": f"{report.get('period_start')} -> {report.get('period_end')}",
+        "bars": report.get("bars"),
+        "data_provider": report.get("data_provider"),
+        "data_checksum": report.get("data_checksum"),
+        "data_quality": report.get("data_quality"),
+        "git_revision": report.get("git_revision"),
+        "random_seed": report.get("random_seed"),
+        "config_fingerprint": (report.get("spec") or {}).get("config_fingerprint"),
+        "objective": (report.get("spec") or {}).get("objective"),
+    }
+
+    panel["metrics"] = [
+        _metric(
+            "Verdict",
+            verdict,
+            str(verdict or "unknown"),
+            tone=panel["verdict_tone"],
+            help_text="No verdict means profitable. The best available is 'survived this "
+            "round of testing'.",
+        ),
+        _metric(
+            "OOS trades",
+            (oos or {}).get("trades"),
+            f"{(oos or {}).get('trades', 0):,}",
+            tone="warn" if ((oos or {}).get("trades") or 0) < 30 else "ok",
+            help_text="Below roughly 30 the out-of-sample statistics are not stable "
+            "enough to support a conclusion.",
+        ),
+        _metric(
+            "OOS expectancy",
+            (oos or {}).get("expectancy_r"),
+            (oos or {}).get("expectancy_display", "n/a"),
+            tone="error" if ((oos or {}).get("expectancy_r") or 0) <= 0 else "neutral",
+            help_text="Mean R per trade on bars the configuration had never seen.",
+        ),
+        _metric(
+            "Walk-forward",
+            (panel["walk_forward"] or {}).get("profitable_folds"),
+            (panel["walk_forward"] or {}).get("profitable_display", "not run"),
+            help_text="Folds with positive expectancy, out of folds run.",
+        ),
+        _metric(
+            "Fragile parameters",
+            len((panel["robustness"] or {}).get("fragile_parameters") or []),
+            ", ".join((panel["robustness"] or {}).get("fragile_parameters") or []) or "none",
+            tone="error"
+            if (panel["robustness"] or {}).get("fragile_parameters")
+            else "ok",
+            help_text="Parameters whose neighbourhood is not flat - a sharp peak at the "
+            "shipped value describes the sample rather than the market.",
+        ),
+        _metric(
+            "Severe overfitting findings",
+            (panel["overfitting"] or {}).get("severe_count", 0),
+            str((panel["overfitting"] or {}).get("severe_count", 0)),
+            tone="error" if (panel["overfitting"] or {}).get("severe_count") else "ok",
+        ),
+    ]
+    return panel
 
 
 # ---------------------------------------------------------------------- graph
@@ -1107,6 +1403,7 @@ def build_view(data: dict[str, Any]) -> dict[str, Any]:
         "portfolio": portfolio_panel(data),
         "execution": execution_panel(data),
         "performance": performance_panel(data),
+        "research": research_panel(data),
         "quality_findings": quality_rows(data),
         "trades": trade_rows(data),
         "graph": graph,

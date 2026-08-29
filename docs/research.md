@@ -419,6 +419,136 @@ configuration that took four trades and won three has an excellent everything.
 
 ---
 
+## The feedback loop: from a finding to a configuration
+
+A study measures things. Turning a measurement into a change to the running
+configuration is a separate act, and this platform keeps it separate.
+
+### Recommendations
+
+After the out-of-sample window has been scored — last, because a recommendation
+reads every other section — the study builds a set of
+[`Recommendation`](../app/research/feedback.py) objects. Each one carries:
+
+| Field | What it is |
+|---|---|
+| `action` | `NO_ACTION`, `CONSIDER_DOWN_WEIGHT` or `INSUFFICIENT_EVIDENCE` |
+| `evidence_tier` | Which bars produced the number |
+| `rationale` | Why it says what it says, in sentences |
+| `blockers` | What stands between it and being applicable |
+| `evidence` | The actual figures, for a reader who wants to disagree |
+
+**There is no `DISABLE` action.** A study can show that dropping a strategy
+scored better on the windows it was tested on. It cannot show that the strategy
+should not exist, and the difference matters: a disabled strategy stops
+producing the evidence that would overturn the decision.
+
+### Evidence tiers
+
+The tier is the whole point. In-sample, validation-window and per-fold
+out-of-sample results are the same arithmetic on different bars — nothing about
+a number reveals which it is.
+
+| Tier | Which bars | Worth |
+|---|---|---|
+| `NONE` | Nothing ran | No claim |
+| `IN_SAMPLE` | Bars the configuration was derived from | Describes the sample |
+| `VALIDATION_WINDOW` | One held-out window, consulted during development | Weak, and weaker each look |
+| `WALK_FORWARD` | Chosen on each fold's training half, scored on its test half | The strongest here, still weak |
+
+A variant that won handsomely on the validation window is recorded as
+`VALIDATION_WINDOW` and **cannot** be applied at the walk-forward bar, however
+large the apparent improvement.
+
+### The gate
+
+```yaml
+# configs/research.yaml
+feedback:
+  enabled: false                 # ships closed
+  min_out_of_sample_trades: 30
+  min_walk_forward_folds: 3
+  require_walk_forward: true
+  max_weight_reduction: 0.5
+```
+
+With the gate closed, recommendations are reporting output and nothing else.
+That is the default, and it is deliberate: a research loop that silently retunes
+the thing it is measuring stops being a measurement. The next study inherits the
+previous study's conclusion as its starting point, and the evidence that would
+have contradicted it is never gathered.
+
+With the gate open, `apply_recommendations` still refuses anything short of the
+bar — and refuses **loudly**, by raising `FeedbackRefusedError`. A silent no-op
+would be indistinguishable from a change that was applied and happened to alter
+nothing. A cut beyond `max_weight_reduction` is refused rather than clamped,
+because a clamped value is a change nobody authorised.
+
+The only thing the loop can change is a strategy's standing weight
+(`StrategyConfig.weight`), which the selector reads as its `base` factor.
+
+### Agreement on inaction is not redundancy
+
+The signal-agreement matrix counts a shared `WAIT` as agreement, which is right
+in general: two strategies that wait together nine bars in ten are one opinion
+with two names. At the extreme it breaks down. A real study run against this
+platform flagged three pairs at 100% agreement where the strategies had opened
+no position at all — the tell was a candidate variant that "changed expectancy
+by +0.000R", because halving the weight of a strategy that never traded changes
+nothing.
+
+Such pairs now produce `INSUFFICIENT_EVIDENCE` with the reason attached, and the
+correlation report notes them where the finding is made.
+
+---
+
+## What has and has not been established
+
+Every report carries an evidence summary that separates eight categories,
+because they fail independently and merging them is the most common way a
+research result gets overstated:
+
+| Category | Why it is separate |
+|---|---|
+| Code and tests | Marked `SEPARATE QUESTION`. A passing suite on a losing strategy is a correctly implemented losing strategy |
+| Out-of-sample evidence | The only category that bears on whether an edge exists, and one window of it is not much |
+| Statistical uncertainty | Resampling explores orderings of trades that happened; it cannot produce a trade never taken |
+| Robustness | One parameter at a time, on the in-sample window; interactions are not explored |
+| Overfitting risk | The trial count covers recorded searches. Choices made before the first study are not counted and cannot be |
+| Correlation and redundancy | Measured on one window |
+| Data quality | Where the instrument is a proxy, the proxy's tracking error is not modelled |
+| Execution assumptions | Spread comes from configuration, not from quotes |
+
+No status is ever "proven". The available values are `ESTABLISHED`, `PARTIAL`,
+`NOT_ESTABLISHED`, `NOT_ASSESSED` and `SEPARATE QUESTION`.
+
+**A green test suite is never evidence that a strategy works.** The two claims
+are answers to different questions, and the report keeps them in separate rows
+so a reader cannot merge them without noticing.
+
+---
+
+## Research on the paper-trading dashboard
+
+The dashboard's **Research** tab reads `reports/validation/<id>/validation_report.json`
+for the instrument the session is running. See
+[paper_trading.md](paper_trading.md) for the rest of that page.
+
+Three things it will not do:
+
+- **It never invents a result.** With no study on disk the panel is empty and
+  carries the reason, including the command that would produce one. A panel
+  showing zeros for a study that was never run reads as "tested, found nothing",
+  which is a much stronger claim than "never tested".
+- **It never shows a study of one configuration as evidence about another.** The
+  report records the config fingerprint it was produced under; a mismatch is
+  reported as `STALE` and the numbers are withheld.
+- **It never merges windows.** In-sample, validation and out-of-sample appear as
+  labelled rows with what each supports written next to it, and the headline
+  metrics come from the out-of-sample window only.
+
+---
+
 ## What this phase does not establish
 
 - That any configuration is profitable, now or ever.

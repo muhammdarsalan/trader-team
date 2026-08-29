@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from app.data.schema import CLOSE, VOLUME
+from app.data.schema import VOLUME
 from app.features.indicators import rolling_percentile, sma
 
 
@@ -74,24 +74,3 @@ def volume_features(
             "volume_trend": sma(volume, period) / sma(volume, period * 3).replace(0.0, np.nan),
         }
     )
-
-
-def price_volume_agreement(df: pd.DataFrame, period: int = 20) -> pd.Series:
-    """Whether volume is expanding in the direction price is moving.
-
-    Rising price on rising volume is the textbook confirmation pattern; rising
-    price on falling volume is the textbook warning. Returns +1 for agreement,
-    -1 for divergence, 0 when either signal is flat or unavailable.
-
-    Treat this as a hypothesis to test, not an established fact - the pattern is
-    widely believed and only sometimes true.
-    """
-    volume = df[VOLUME]
-    if not (volume.notna().any() and (volume.fillna(0) > 0).any()):
-        return pd.Series(np.nan, index=df.index)
-
-    price_change = df[CLOSE].diff(period)
-    volume_change = sma(volume, period) - sma(volume, period).shift(period)
-
-    agreement = np.sign(price_change) * np.sign(volume_change)
-    return pd.Series(agreement, index=df.index).fillna(0.0)

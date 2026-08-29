@@ -598,6 +598,43 @@ class RobustnessSettings(StrictModel):
     points: int = Field(default=5, ge=3)
 
 
+class FeedbackSettings(StrictModel):
+    """Whether validated research findings may change the running configuration.
+
+    Ships **disabled**, and that is the important part. A research loop that
+    silently retunes the thing it is measuring stops being a measurement: the
+    next study inherits the previous study's conclusion as its starting point,
+    and the evidence that would have contradicted it is never gathered.
+
+    Turning this on does not make the loop trusting. A recommendation still has
+    to clear the evidence bar below, and one that does not is *refused out loud*
+    rather than skipped - see :func:`app.research.feedback.apply_recommendations`.
+    A silent no-op would be indistinguishable from a change that was applied and
+    happened to alter nothing.
+    """
+
+    #: The gate. False means research output is reporting only.
+    enabled: bool = False
+
+    #: Out-of-sample trades required before any finding may move a weight. The
+    #: same threshold the validation report uses before it will conclude.
+    min_out_of_sample_trades: int = Field(default=30, ge=1)
+
+    #: Walk-forward folds that must have selected a variant before fold
+    #: agreement counts as repetition rather than coincidence.
+    min_walk_forward_folds: int = Field(default=3, ge=1)
+
+    #: Require per-fold out-of-sample evidence. With this false a single
+    #: validation window can move a weight, which is a materially weaker claim;
+    #: it is offered because it is a legitimate research choice, not because it
+    #: is a good default.
+    require_walk_forward: bool = True
+
+    #: The largest cut this loop will make to a standing weight, as a fraction.
+    #: A recommendation proposing more is refused, not clamped.
+    max_weight_reduction: float = Field(default=0.5, ge=0, le=1)
+
+
 class ResearchConfig(StrictModel):
     """How a validation study is run.
 
@@ -640,6 +677,10 @@ class ResearchConfig(StrictModel):
     walk_forward: WalkForwardSettings = Field(default_factory=WalkForwardSettings)
     monte_carlo: MonteCarloSettings = Field(default_factory=MonteCarloSettings)
     robustness: RobustnessSettings = Field(default_factory=RobustnessSettings)
+
+    #: Whether validated findings may feed back into the strategy configuration.
+    #: Disabled by default; see :class:`FeedbackSettings`.
+    feedback: FeedbackSettings = Field(default_factory=FeedbackSettings)
 
     @field_validator("split_fractions")
     @classmethod

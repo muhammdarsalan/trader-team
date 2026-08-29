@@ -458,6 +458,237 @@ def render_performance(view: dict[str, Any]) -> None:
         )
 
 
+def render_research(view: dict[str, Any]) -> None:
+    """Validation context for the configuration this session is running."""
+    research = view["research"]
+    st.subheader("Research and validation")
+
+    if not research["available"]:
+        # The whole panel, when there is nothing to show. No tables of zeros.
+        message = f"**No validation context: {research['availability']}** — {research['reason']}"
+        if research["availability"] == "UNREADABLE":
+            st.error(message)
+        else:
+            st.warning(message)
+        st.caption(
+            "This is deliberately blank. A research panel showing zeros for a study "
+            "that was never run would read as \u201ctested, found nothing\u201d, which is a "
+            "much stronger claim than \u201cnever tested\u201d."
+        )
+        if research["other_experiments"]:
+            with st.expander(f"Other studies on disk ({len(research['other_experiments'])})"):
+                _table(
+                    research["other_experiments"],
+                    [
+                        ("experiment_id", "Experiment"),
+                        ("symbol", "Symbol"),
+                        ("timeframe", "TF"),
+                        ("verdict", "Verdict"),
+                        ("created_at", "Generated"),
+                    ],
+                )
+        _render_evidence_ladder(research)
+        return
+
+    _metric_columns(research["metrics"], per_row=3)
+
+    st.markdown(f"**Verdict: {research['verdict']}**")
+    for reason in research["verdict_reasons"]:
+        st.write(f"- {reason}")
+    st.caption(
+        "There is no verdict meaning \u201cprofitable\u201d and there never will be. The best "
+        "available conclusion is that a configuration survived one round of testing."
+    )
+
+    if research["evidence_summary"]:
+        st.divider()
+        st.markdown("**What has and has not been established**")
+        st.caption(
+            "These fail independently. Merging them is the most common way a research "
+            "result gets overstated, so each is stated separately with its own limitation."
+        )
+        _table(
+            research["evidence_summary"],
+            [
+                ("category", "Category"),
+                ("status", "Status"),
+                ("detail", "What was found"),
+                ("limitation", "What it still cannot tell you"),
+            ],
+        )
+
+    st.divider()
+    st.markdown("**In-sample vs out-of-sample**")
+    st.caption(
+        "The same arithmetic on different bars. Only the label distinguishes them, which "
+        "is why they are never summed or headlined together."
+    )
+    _table(
+        research["segments"],
+        [
+            ("segment", "Window"),
+            ("supports", "What it supports"),
+            ("bars", "Bars"),
+            ("trades", "Trades"),
+            ("return_display", "Return"),
+            ("expectancy_display", "Expectancy"),
+            ("drawdown_display", "Max DD"),
+            ("win_rate_display", "Win rate"),
+            ("data_quality", "Data quality"),
+        ],
+    )
+
+    wf = research["walk_forward"]
+    if wf:
+        st.markdown("**Walk-forward**")
+        cols = st.columns(3)
+        cols[0].metric("Folds", wf["folds"])
+        cols[1].metric("Profitable folds", wf["profitable_display"])
+        cols[2].metric(
+            "Efficiency",
+            "n/a" if wf["efficiency"] is None else f"{wf['efficiency']:.2f}",
+            help="Mean test objective over mean training objective.",
+        )
+        for warning in wf["warnings"]:
+            st.warning(warning)
+    else:
+        st.caption("Walk-forward analysis was not run for this study.")
+
+    robustness = research["robustness"]
+    if robustness:
+        st.markdown("**Parameter robustness**")
+        st.caption(
+            f"Swept on the {robustness['measured_on']} window against "
+            f"{robustness['objective']}. A flat neighbourhood is the good outcome, even "
+            "at a mediocre level; a sharp peak at the shipped value describes the sample."
+        )
+        _table(
+            robustness["rows"],
+            [
+                ("parameter", "Parameter"),
+                ("spread_display", "Spread (CV)"),
+                ("baseline_is_peak", "Shipped value is the peak"),
+                ("verdict", "Verdict"),
+            ],
+        )
+        if robustness["fragile_parameters"]:
+            st.error(
+                "Fragile parameters: " + ", ".join(robustness["fragile_parameters"])
+            )
+    else:
+        st.caption("No parameter sensitivity sweep is recorded for this study.")
+
+    correlation = research["correlation"]
+    if correlation:
+        st.markdown("**Strategy correlation and redundancy**")
+        st.caption(
+            f"Measured on the {correlation['measured_on']} window at threshold "
+            f"{correlation['threshold']}. A correlation is a hypothesis about redundancy, "
+            "not a finding about it — no strategy is disabled on the strength of one."
+        )
+        if correlation["findings"]:
+            _table(
+                correlation["findings"],
+                [
+                    ("pair", "Pair"),
+                    ("correlation_display", "Return correlation"),
+                    ("agreement_display", "Signal agreement"),
+                    ("observations", "Observations"),
+                ],
+            )
+        else:
+            st.caption("No pair exceeded the threshold.")
+
+    overfitting = research["overfitting"]
+    if overfitting:
+        st.markdown("**Overfitting diagnostics**")
+        cols = st.columns(2)
+        cols[0].metric("Configurations tried", f"{overfitting.get('trials', 0):,}")
+        deflated = overfitting.get("deflated_sharpe")
+        cols[1].metric(
+            "Deflated Sharpe",
+            "n/a" if deflated is None else f"{deflated:.2f}",
+            help="Sharpe adjusted for how many configurations were searched to find it.",
+        )
+        for finding in overfitting["findings"]:
+            text = f"**{finding['severity']}** — {finding['message']}"
+            if finding["tone"] == "error":
+                st.error(text)
+            elif finding["tone"] == "warn":
+                st.warning(text)
+            else:
+                st.info(text)
+
+    st.divider()
+    st.markdown("**Recommendations**")
+    st.caption(research["recommendation_note"])
+    if research["recommendations"]:
+        _table(
+            research["recommendations"],
+            [
+                ("subject", "Finding"),
+                ("action", "Action"),
+                ("evidence_tier", "Evidence"),
+                ("strategy", "Strategy"),
+                ("proposed_weight", "Proposed weight"),
+                ("applicable", "Meets the bar"),
+            ],
+        )
+        with st.expander("Why each recommendation says what it says"):
+            for rec in research["recommendations"]:
+                st.markdown(f"**{rec['subject']}** — {rec['action']} ({rec['evidence_tier']})")
+                for line in rec["rationale"]:
+                    st.write(f"- {line}")
+                for blocker in rec["blockers"]:
+                    st.write(f"- _not applicable:_ {blocker}")
+    else:
+        st.caption("Nothing was flagged, so there is nothing to recommend.")
+
+    st.divider()
+    st.markdown("**Experiment provenance**")
+    st.caption(
+        "What this study was run against. A result without its data checksum, code "
+        "revision and seed is not reproducible, and an irreproducible result is an "
+        "anecdote."
+    )
+    provenance = research["provenance"]
+    _table(
+        # Values are stringified: the column mixes ints (bars, seed) with strings
+        # (checksums, dates), and a mixed object column fails Arrow conversion,
+        # which drops the table silently rather than raising.
+        [
+            {"field": k.replace("_", " "), "value": "n/a" if v is None else str(v)}
+            for k, v in provenance.items()
+        ],
+        [("field", "Field"), ("value", "Value")],
+    )
+    if research["report_path"]:
+        st.caption(f"Full report: `{research['report_path']}`")
+
+    _render_evidence_ladder(research)
+
+
+def _render_evidence_ladder(research: dict[str, Any]) -> None:
+    """What each rung of evidence does and does not support."""
+    ladder = research.get("evidence_ladder") or []
+    if not ladder:
+        return
+    with st.expander("What counts as evidence here"):
+        st.caption(
+            "A green test suite says the implementation does what it was written to do. "
+            "It says nothing about whether the strategy has an edge. These are separate "
+            "claims and this page keeps them separate."
+        )
+        _table(
+            ladder,
+            [
+                ("rung", "Rung"),
+                ("supports", "Supports"),
+                ("does_not_support", "Does not support"),
+            ],
+        )
+
+
 def build_graph_figure(spec: dict[str, Any]) -> go.Figure:
     """Draw the decision graph: Market Data → … → Paper Position."""
     figure = go.Figure()
@@ -607,7 +838,7 @@ def render_dashboard(engine: PaperTradingEngine | None = None) -> dict[str, Any]
     render_header(view)
     tabs = st.tabs(
         ["Market & regime", "Strategies & decision", "Portfolio", "Execution",
-         "Performance", "Graph", "Activity"]
+         "Performance", "Research", "Graph", "Activity"]
     )
     with tabs[0]:
         render_market(view)
@@ -624,8 +855,10 @@ def render_dashboard(engine: PaperTradingEngine | None = None) -> dict[str, Any]
     with tabs[4]:
         render_performance(view)
     with tabs[5]:
-        render_graph(view)
+        render_research(view)
     with tabs[6]:
+        render_graph(view)
+    with tabs[7]:
         render_activity(view)
     return view
 

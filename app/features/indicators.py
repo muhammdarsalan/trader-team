@@ -280,8 +280,3 @@ def crossover(fast: pd.Series, slow: pd.Series) -> pd.Series:
     """
     above = fast > slow
     return above & ~above.shift(1, fill_value=False) & fast.shift(1).notna() & slow.shift(1).notna()
-
-
-def crossunder(fast: pd.Series, slow: pd.Series) -> pd.Series:
-    """True on the bar where ``fast`` crosses below ``slow``."""
-    return crossover(slow, fast)

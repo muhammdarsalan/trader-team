@@ -46,6 +46,7 @@ from app.research.experiments import (
     reproducible_experiment_id,
     stable_hash,
 )
+from app.research.feedback import build_recommendations
 from app.research.harness import ResearchHarness, SegmentRun
 from app.research.monte_carlo import monte_carlo_trade_sequence
 from app.research.objectives import get_objective
@@ -122,6 +123,11 @@ class ValidationStudy:
     def _spec(self) -> dict[str, Any]:
         s = self.settings
         return {
+            # Which configuration this study describes. Recorded in the report
+            # itself, not only in the experiment store, so a surface reading
+            # validation_report.json can tell whether the study still describes
+            # the system it is being shown next to.
+            "config_fingerprint": config_fingerprint(self._config_snapshot()),
             "split_fractions": list(s.split_fractions),
             "embargo_bars": s.embargo_bars,
             "objective": s.objective,
@@ -260,6 +266,16 @@ class ValidationStudy:
                 report.robustness.fragile_parameters if report.robustness else ()
             ),
             degraded_segments=report.degraded_segments,
+        )
+
+        # --- what the findings would imply -------------------------------------
+        # Last, and after the out-of-sample window has been scored: a
+        # recommendation reads the other sections, so building it earlier would
+        # mean reading results that did not exist yet.
+        report.recommendations = build_recommendations(
+            report,
+            min_out_of_sample_trades=self.settings.feedback.min_out_of_sample_trades,
+            min_walk_forward_folds=self.settings.feedback.min_walk_forward_folds,
         )
 
         # --- 9. record ------------------------------------------------------------

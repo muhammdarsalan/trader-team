@@ -607,6 +607,18 @@ def _execution_node(
             "A paper order was queued for the next bar's open. No broker is "
             "contacted and no real money is at risk.",
         )
+    # Nothing reached risk, so nothing reached execution either. The kill switch
+    # is worth stating here because it will matter on a bar that does get this
+    # far, but it did not stop *this* bar - aggregation did - and drawing the
+    # stage as BLOCKED would claim an execution attempt that never happened.
+    if risk is None:
+        detail = "Nothing has reached execution yet."
+        if trading_enabled is False:
+            detail += (
+                " Separately, trading_enabled is false, so no order would be "
+                "created even on a bar that did reach this stage."
+            )
+        return _node("execution", "Execution", "execution", "PENDING", detail, terminal=True)
     if trading_enabled is False:
         return _node(
             "execution", "Execution", "execution", "BLOCKED",
@@ -614,9 +626,6 @@ def _execution_node(
             "created even when a signal and risk would allow one.",
             terminal=True,
         )
-    if risk is None:
-        return _node("execution", "Execution", "execution", "PENDING",
-                     "Nothing has reached execution yet.", terminal=True)
     return _node("execution", "Execution", "execution", "WAIT",
                  "No actionable signal, so there was nothing to execute.", terminal=True)
 

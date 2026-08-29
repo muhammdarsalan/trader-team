@@ -1394,6 +1394,49 @@ def test_performance_is_computed_from_closed_trades_only(config_dir):
     assert "Closed trades only" in performance["basis"]
 
 
+def test_the_proxy_caveat_does_not_claim_a_vendor_that_did_not_supply_the_data(config_dir):
+    """The caveat names a vendor, so it must not be shown over another one's data.
+
+    ``configs/assets.yaml`` says "Prices come from Yahoo GC=F". Replaying the
+    same symbol from a CSV drop or the synthetic generator printed that sentence
+    over data Yahoo never supplied. The proxy warning still has to appear - the
+    symbol is still a proxy for spot - so it is qualified, not dropped.
+    """
+    engine = PaperTradingEngine(config=get_config(config_dir), symbol="XAUUSD", timeframe="1D")
+
+    mapped = engine._caveat_for("yahoo")
+    assert mapped is not None and mapped.startswith("Prices come from Yahoo GC=F")
+
+    unmapped = engine._caveat_for("synthetic")
+    assert "'synthetic' provider" in unmapped
+    assert "did not supply it" in unmapped
+    assert "proxy for spot XAUUSD" in unmapped, "the proxy warning must survive"
+
+    assert engine._caveat_for(None) == mapped, (
+        "an unrecorded provider must not invent a qualification either"
+    )
+
+
+def test_profit_factor_distinguishes_no_losses_from_no_trades(config_dir):
+    """An empty book must not report "no losses in sample".
+
+    ``build_performance`` returns ``None`` for the profit factor in both cases -
+    with no losses there is nothing to divide by, and with no trades there is
+    nothing at all - so the panel used to render them identically. To a reader
+    with a flat book that claimed trades had happened and every one had won.
+    """
+    engine = PaperTradingEngine(config=get_config(config_dir), symbol="XAUUSD", timeframe="1D")
+    metrics = {m["label"]: m for m in build_view(engine.dashboard_data())["performance"]["metrics"]}
+
+    factor = metrics["Profit factor"]
+    assert factor["value"] is None
+    assert metrics["Closed trades"]["value"] == 0
+    assert "no closed trades" in factor["display"]
+    assert "no losses" not in factor["display"], (
+        "an empty book must not imply that trades happened and none lost"
+    )
+
+
 def test_performance_splits_by_strategy_and_regime(config_dir):
     engine = _engine(config_dir)
     engine.catch_up(_real_shaped_market(end="2018-12-31"), data_quality="PASS")
@@ -1707,6 +1750,58 @@ def test_graph_marks_the_kill_switch_at_execution(config_dir):
     assert engine.dashboard_data()["safety"]["trading_enabled"] is False
     banners = build_view(engine.dashboard_data())["banners"]
     assert any("Kill switch on" in b["title"] for b in banners)
+
+
+def test_execution_is_not_blamed_on_the_kill_switch_when_nothing_reached_it(config_dir):
+    """A WAIT bar must not be drawn as "blocked by the kill switch".
+
+    The switch ships off, so on the default configuration this fired on every
+    bar the graph ended at aggregation: execution came back BLOCKED, red, with
+    ``reached`` true, attributing the stop to a switch that never came into it.
+    Two different realities - "no signal" and "execution off" - rendered
+    identically, and the one shown was the wrong one.
+
+    When the switch does stop an actionable signal the risk engine records
+    KILL_SWITCH and the *risk* node carries it, so nothing is lost here.
+    """
+    node = next(
+        n
+        for n in build_graph_visualization(None, trading_enabled=False)["nodes"]
+        if n["id"] == "execution"
+    )
+    assert node["status"] == "PENDING"
+    assert node["reached"] is False, "no execution attempt was made on this bar"
+    assert "Nothing has reached execution" in node["detail"]
+    assert "trading_enabled is false" in node["detail"], (
+        "the switch is still worth stating, just not as this bar's cause"
+    )
+
+
+def test_the_kill_switch_still_blocks_execution_once_risk_has_run(config_dir):
+    """The genuine case must keep its red BLOCKED node."""
+    approved = {
+        "strategies": [],
+        "failed": [],
+        "risk": {
+            "approved": True, "verdict": "APPROVED", "block_reason": None,
+            "quantity": 1.5, "risk_amount": 100.0, "reasoning": (),
+        },
+        "aggregation": None,
+        "regime": None,
+        "order": None,
+        "decision": "LONG",
+        "timestamp": None,
+        "warm": True,
+        "skipped_reason": None,
+    }
+    node = next(
+        n
+        for n in build_graph_visualization(approved, trading_enabled=False)["nodes"]
+        if n["id"] == "execution"
+    )
+    assert node["status"] == "BLOCKED"
+    assert node["reached"] is True
+    assert "kill switch is on" in node["detail"]
 
 
 def test_graph_figure_spec_places_every_node(config_dir):

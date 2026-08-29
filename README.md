@@ -42,7 +42,8 @@ with a monitoring dashboard over it.
 | 2 | Features, regime detection, 5 strategies, signals | ✅ Complete |
 | 3 | LangGraph workflow, selector, risk, execution, backtester | ✅ Complete |
 | 4 | Walk-forward, OOS, Monte Carlo, robustness, experiment DB | ✅ Complete |
-| 5 | Paper trading engine, Streamlit dashboard, docs | ✅ Paper trading + dashboard complete |
+| 5 | Paper trading engine, Streamlit dashboard, docs | ✅ Complete |
+| 6 | Research↔paper integration, feedback loop, evidence reporting | ✅ Complete |
 
 What works today: download and validate 26 years of daily OHLCV across six
 instruments; compute a causal feature panel; classify market regimes; run five
@@ -63,8 +64,9 @@ risk engine, graph and portfolio through the same per-bar sequence, and a test
 compares every field of every trade the two produce over one frame. A divergence
 there would be invisible otherwise: both would keep producing plausible numbers.
 
-Remaining for phase 5: research/paper integration, the final robustness and
-presentation pass, and end-to-end release documentation.
+Research findings now reach the dashboard and can — only when explicitly
+configured — reach the strategy selector. The gate ships closed; see
+[docs/research.md](docs/research.md#the-gate).
 
 **No profitability claim is made anywhere in this project.** The backtester
 reports what happened on one historical sample, warnings included. On the
@@ -79,23 +81,36 @@ and its most common one is that a configuration has not been shown to work.
 ## Installation
 
 Requires Python 3.11+ on Windows, macOS or Linux. No Docker, no GPU, no cloud,
-no paid services.
+no paid services, no credentials.
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-# source .venv/bin/activate   # macOS / Linux
+**Windows (PowerShell)**
+
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-Optional configuration:
+**macOS / Linux**
 
 ```bash
-copy .env.example .env        # Windows
-# cp .env.example .env
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-The platform runs with **zero secrets**. `.env` only enables optional extras.
+Optional — the platform runs with **zero secrets**, and `.env` only enables
+extras you would have to switch on yourself:
+
+```powershell
+copy .env.example .env        # Windows
+```
+```bash
+cp .env.example .env          # macOS / Linux
+```
+
+Full setup, per-platform command variants, offline operation, environment
+overrides and troubleshooting: **[docs/setup.md](docs/setup.md)**.
 
 ---
 
@@ -120,8 +135,8 @@ python scripts/run_research.py --symbol XAUUSD --timeframe 1D --start 2012-01-01
 # What has already been tried against this data
 python scripts/run_research.py --list-experiments
 
-# Run the tests
-pytest -m "not network"
+# Run the tests (offline by default)
+pytest
 
 # Paper-trade over replayed history (deterministic, no network once cached)
 python scripts/run_paper_trading.py --symbol XAUUSD --timeframe 1D --start 2012-01-01
@@ -253,11 +268,20 @@ and the first banner on the dashboard.
 ## Testing
 
 ```bash
-pytest -m "not network"              # default: fully offline and deterministic
-pytest -m "not network and not slow" # skip the end-to-end validation studies
-pytest -m network                    # the one live-endpoint test
-pytest --cov=app                     # with coverage
+pytest                                 # the default run: offline, deterministic
+pytest -m "not slow and not network"   # skip the end-to-end validation studies
+pytest -m network                      # the one live-endpoint test
+pytest --cov=app                       # with coverage
 ```
+
+The single network test is deselected by `addopts` in `pyproject.toml`, so a
+clean checkout passes with no internet. A command-line `-m` **replaces** that
+expression rather than adding to it, which is why the second line spells out
+`not network` again — `pytest -m "not slow"` alone would quietly select the
+live test back in.
+
+The default run takes about 11 minutes, most of it in the `slow` validation
+studies; `-m "not slow and not network"` takes about 4½.
 
 Offline tests covering schema contracts, config validation, cleaning,
 resampling, the quality engine, cache integrity, all three providers, the
@@ -339,6 +363,7 @@ experiments/    experiment records  (gitignored)
 
 ## Documentation
 
+- [docs/setup.md](docs/setup.md) — install and run on Windows/macOS/Linux, offline operation, data limits, troubleshooting
 - [docs/data.md](docs/data.md) — sources, provenance, schema, quality, limitations
 - [docs/features.md](docs/features.md) — indicators, market structure, causality guarantees
 - [docs/strategies.md](docs/strategies.md) — the five strategies, regimes, the Signal contract
@@ -346,6 +371,7 @@ experiments/    experiment records  (gitignored)
 - [docs/backtesting.md](docs/backtesting.md) — bar ordering, execution realism, risk limits, metrics
 - [docs/research.md](docs/research.md) — validation, walk-forward, overfitting, experiment tracking
 - [docs/paper_trading.md](docs/paper_trading.md) — the paper session, persistence, the dashboard, the graph view
+- [docs/research.md](docs/research.md#the-feedback-loop-from-a-finding-to-a-configuration) — the feedback loop, evidence tiers, and what a green test suite does not establish
 - [docs/architecture.md](docs/architecture.md) — design decisions and rationale
 
 ---

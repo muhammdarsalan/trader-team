@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from app.regimes.models import MarketRegime, RegimeType
+from app.regimes.models import MarketRegime
 from app.signals.models import Signal, SignalDirection
 from app.utils.logging import get_logger
 
@@ -262,10 +262,3 @@ def signals_conflict(signals: list[Signal]) -> bool:
     """Whether actionable signals disagree on direction."""
     directions = {s.direction for s in signals if s.is_actionable}
     return SignalDirection.LONG in directions and SignalDirection.SHORT in directions
-
-
-def dominant_regime_note(regime: MarketRegime) -> str:
-    """One-line summary used in decision explanations."""
-    if regime.regime is RegimeType.UNCERTAIN:
-        return "Market regime is UNCERTAIN, so strategy weighting rests on regime fit alone"
-    return f"Market regime is {regime.regime} at {regime.confidence:.0%} confidence"
