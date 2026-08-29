@@ -42,7 +42,8 @@ with a monitoring dashboard over it.
 | 2 | Features, regime detection, 5 strategies, signals | ✅ Complete |
 | 3 | LangGraph workflow, selector, risk, execution, backtester | ✅ Complete |
 | 4 | Walk-forward, OOS, Monte Carlo, robustness, experiment DB | ✅ Complete |
-| 5 | Paper trading engine, Streamlit dashboard, docs | ✅ Paper trading + dashboard complete |
+| 5 | Paper trading engine, Streamlit dashboard, docs | ✅ Complete |
+| 6 | Research↔paper integration, feedback loop, evidence reporting | ✅ Complete |
 
 What works today: download and validate 26 years of daily OHLCV across six
 instruments; compute a causal feature panel; classify market regimes; run five
@@ -63,8 +64,9 @@ risk engine, graph and portfolio through the same per-bar sequence, and a test
 compares every field of every trade the two produce over one frame. A divergence
 there would be invisible otherwise: both would keep producing plausible numbers.
 
-Remaining for phase 5: research/paper integration, the final robustness and
-presentation pass, and end-to-end release documentation.
+Research findings now reach the dashboard and can — only when explicitly
+configured — reach the strategy selector. The gate ships closed; see
+[docs/research.md](docs/research.md#the-gate).
 
 **No profitability claim is made anywhere in this project.** The backtester
 reports what happened on one historical sample, warnings included. On the
@@ -346,6 +348,7 @@ experiments/    experiment records  (gitignored)
 - [docs/backtesting.md](docs/backtesting.md) — bar ordering, execution realism, risk limits, metrics
 - [docs/research.md](docs/research.md) — validation, walk-forward, overfitting, experiment tracking
 - [docs/paper_trading.md](docs/paper_trading.md) — the paper session, persistence, the dashboard, the graph view
+- [docs/research.md](docs/research.md#the-feedback-loop-from-a-finding-to-a-configuration) — the feedback loop, evidence tiers, and what a green test suite does not establish
 - [docs/architecture.md](docs/architecture.md) — design decisions and rationale
 
 ---

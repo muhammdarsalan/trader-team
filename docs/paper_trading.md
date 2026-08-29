@@ -273,6 +273,7 @@ is asserted, and an assertion cannot pass on a correctly-formatted wrong number.
 | Portfolio | Where does the book stand — equity, realised and unrealised P&L, drawdown, open positions, recent trades? |
 | Execution | What did the simulated fills cost, broken into spread, slippage and commission? |
 | Performance | Of the closed trades, how did they turn out by strategy and by regime? |
+| Research | Has this configuration been validated, and what did the study conclude? |
 | Graph | How far did this bar get through the pipeline, and what stopped it? |
 | Activity | What has happened, and what has failed? |
 
@@ -300,6 +301,27 @@ the trade, and the panel breaks results down by contributor. A trade appears
 under every strategy that voted for it, so those rows do **not** sum to the
 portfolio's P&L — read each on its own: *of the trades this strategy argued for,
 this is how they turned out.*
+
+### Research context, or its absence
+
+The Research tab reads the validation study for this instrument from
+`reports/validation/`. It shows the verdict, in-sample against out-of-sample
+windows with what each supports, walk-forward folds, parameter robustness,
+correlation findings, overfitting diagnostics, recommendations and full
+experiment provenance — and an evidence summary separating what has been
+established from what has not.
+
+When there is no study, the panel is **empty and says why**, including the
+command that would produce one. It does not render zeros. A research panel
+showing zeros for a study that was never run reads as "tested, found nothing",
+which is a much stronger claim than "never tested", and nothing about a table of
+zeros distinguishes the two. The same applies when the only study on disk is for
+a different instrument, was run under a different configuration fingerprint
+(`STALE`), or cannot be parsed (`UNREADABLE`) — each is a different fact and
+only one of them is fixed by running a study.
+
+Nothing on that tab is applied to the running configuration. See
+[research.md](research.md#the-gate) for the gate, which ships closed.
 
 ### Health is derived, not assumed
 

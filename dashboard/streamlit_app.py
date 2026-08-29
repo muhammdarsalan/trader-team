@@ -646,9 +646,20 @@ def render_research(view: dict[str, Any]) -> None:
 
     st.divider()
     st.markdown("**Experiment provenance**")
+    st.caption(
+        "What this study was run against. A result without its data checksum, code "
+        "revision and seed is not reproducible, and an irreproducible result is an "
+        "anecdote."
+    )
     provenance = research["provenance"]
     _table(
-        [{"field": k.replace("_", " "), "value": v} for k, v in provenance.items()],
+        # Values are stringified: the column mixes ints (bars, seed) with strings
+        # (checksums, dates), and a mixed object column fails Arrow conversion,
+        # which drops the table silently rather than raising.
+        [
+            {"field": k.replace("_", " "), "value": "n/a" if v is None else str(v)}
+            for k, v in provenance.items()
+        ],
         [("field", "Field"), ("value", "Value")],
     )
     if research["report_path"]:

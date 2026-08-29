@@ -487,3 +487,113 @@ def test_data_quality_stays_visible_alongside_research(config_dir, monkeypatch, 
     # The live market panel's own quality reporting is untouched.
     assert "quality_findings" in view
     assert any(m["label"] == "Quality" for m in view["market"]["metrics"])
+
+
+# --------------------------------------------- data quality through the research path
+
+
+def test_a_degraded_window_is_not_established_data_quality():
+    """A study that ran on caveated data must say so in the evidence summary.
+
+    The failure this prevents is a research panel that reports clean statistics
+    from a window the quality gate had flagged, with the flag visible only in a
+    separate section nobody correlates with the numbers.
+    """
+    import pandas as pd
+
+    from app.backtest.metrics import PerformanceMetrics
+    from app.backtest.results import BacktestResult, RunProvenance
+    from app.research.harness import SegmentRun
+    from app.research.report import ValidationReport
+    from app.research.splits import Segment, SegmentRole
+
+    index = pd.bdate_range("2016-01-01", periods=200, tz="UTC")
+    segment = Segment(
+        name="out_of_sample", role=SegmentRole.TEST, start=0, end=len(index),
+        data_start=0, start_time=index[0], end_time=index[-1],
+    )
+    metrics = PerformanceMetrics(total_trades=40, expectancy_r=0.1)
+    run = SegmentRun(
+        segment=segment, variant="baseline", metrics=metrics, trades=pd.DataFrame(),
+        equity_curve=pd.Series([10_000.0, 10_100.0]),
+        data_quality="WARNING", data_quality_source="service",
+        result=BacktestResult(
+            provenance=RunProvenance(
+                experiment_id="RES-dq", symbol="EURUSD", timeframe="1D", start=None,
+                end=None, bars=200, data_provider="yahoo", data_checksum="c",
+                data_quality="WARNING",
+            ),
+            metrics=metrics, trades=pd.DataFrame(),
+            equity_curve=pd.Series([10_000.0, 10_100.0]), snapshots=pd.DataFrame(),
+        ),
+    )
+    report = ValidationReport(experiment_id="RES-dq", symbol="EURUSD", timeframe="1D")
+    report.segments = [run]
+
+    assert report.degraded_segments == ("out_of_sample",)
+    quality_row = next(
+        r for r in report.evidence_summary() if r["category"] == "Data quality"
+    )
+    assert quality_row["status"] == "NOT_ESTABLISHED"
+    assert "out_of_sample" in quality_row["detail"]
+    assert "proxy" in quality_row["limitation"]
+
+
+def test_clean_windows_still_do_not_reach_established():
+    """Even with clean data, nothing in the evidence summary reads 'proven'."""
+    from app.research.report import ValidationReport
+
+    rows = ValidationReport(experiment_id="X", symbol="XAUUSD", timeframe="1D").evidence_summary()
+
+    # Every row states a limitation, whatever its status. A row that claimed a
+    # finding with nothing it still cannot tell you would be the overstatement
+    # this summary exists to prevent.
+    for row in rows:
+        assert row["limitation"], f"{row['category']} claims no limitation"
+
+    joined = " ".join(f"{r['status']} {r['detail']} {r['limitation']}" for r in rows).lower()
+    for word in ("proven", "guaranteed", "will make", "expected return"):
+        assert word not in joined, f"the evidence summary implies {word!r}"
+
+
+def test_the_code_and_tests_row_disclaims_any_edge_finding():
+    """A green suite must be explicitly separated from research validity."""
+    from app.research.report import ValidationReport
+
+    rows = ValidationReport(experiment_id="X", symbol="XAUUSD", timeframe="1D").evidence_summary()
+    code = next(r for r in rows if r["category"] == "Code and tests")
+
+    assert code["status"] == "SEPARATE QUESTION"
+    assert "losing strategy" in code["limitation"]
+    assert "edge" in code["limitation"]
+
+
+def test_execution_assumptions_are_never_established():
+    """No simulated fill ever met a venue, and the report says so unconditionally."""
+    from app.research.report import ValidationReport
+
+    rows = ValidationReport(experiment_id="X", symbol="XAUUSD", timeframe="1D").evidence_summary()
+    execution = next(r for r in rows if r["category"] == "Execution assumptions")
+
+    assert execution["status"] == "NOT_ESTABLISHED"
+    assert "no order in this study met a real venue" in execution["detail"].lower()
+    assert "widens exactly when it matters most" in execution["limitation"]
+
+
+def test_the_evidence_summary_reaches_the_dashboard_panel(reports_root):
+    payload = _report_payload()
+    payload["evidence_summary"] = [
+        {"category": "Code and tests", "status": "SEPARATE QUESTION",
+         "detail": "d", "limitation": "l"},
+        {"category": "Out-of-sample evidence", "status": "NOT_ESTABLISHED",
+         "detail": "7 trades", "limitation": "one window"},
+    ]
+    _write(reports_root, payload)
+    panel = research_panel(
+        {"research": load_research_context("XAUUSD", "1D", directory=reports_root).to_dict()}
+    )
+
+    rows = {r["category"]: r for r in panel["evidence_summary"]}
+    assert rows["Code and tests"]["tone"] == "info"
+    assert rows["Out-of-sample evidence"]["tone"] == "error"
+    assert rows["Out-of-sample evidence"]["limitation"] == "one window"
