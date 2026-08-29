@@ -20,13 +20,21 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
 from app.regimes.models import MarketRegime, RegimeType
 from app.signals.models import Signal, SignalDirection
-from app.strategies.base import Strategy
 from app.utils.logging import get_logger
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, not runtime behaviour
+    # app.strategies.base imports app.signals, which imports this module. A
+    # runtime import here therefore fails whenever app.strategies is imported
+    # first - `import app.strategies.registry` in a fresh interpreter raised
+    # ImportError while the identical code worked if app.signals happened to be
+    # imported earlier. The annotation is all this module needs.
+    from app.strategies.base import Strategy
 
 logger = get_logger(__name__)
 

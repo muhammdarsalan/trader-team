@@ -31,7 +31,9 @@ __all__ = [
     "graph_figure_spec",
     "header_panel",
     "market_panel",
+    "performance_panel",
     "portfolio_panel",
+    "quality_rows",
     "regime_panel",
     "safety_banners",
     "strategy_rows",
@@ -109,6 +111,30 @@ def _price(value: Any, digits: int = 5) -> str:
         return f"{float(value):,.{digits}g}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _repaired_share(quality: dict[str, Any]) -> float | None:
+    """Share of bars cleaning had to repair, from the gate's own stats.
+
+    Read from ``stats`` rather than recomputed, so the number on the page is the
+    number the gate graded against.
+    """
+    stats = quality.get("stats") or {}
+    repaired, rows = stats.get("bars_repaired"), quality.get("rows")
+    if repaired is None or not rows:
+        return None
+    try:
+        return float(repaired) / float(rows)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _repaired_display(quality: dict[str, Any]) -> str:
+    share = _repaired_share(quality)
+    if share is None:
+        return "not measured"
+    repaired = (quality.get("stats") or {}).get("bars_repaired") or 0
+    return f"{int(repaired):,} bars ({_pct(share)})"
 
 
 # ------------------------------------------------------------------- banners
@@ -353,8 +379,26 @@ def market_panel(data: dict[str, Any]) -> dict[str, Any]:
                 str(market.get("quality_status", "UNKNOWN")),
                 tone=_tone(market.get("quality_status")),
                 help_text=(
-                    "; ".join(str(i) for i in (quality.get("issues") or [])[:3]) or None
+                    "; ".join(
+                        str(i.get("message", i)) if isinstance(i, dict) else str(i)
+                        for i in (quality.get("issues") or [])[:3]
+                    )
+                    or "The quality gate recorded no findings for this series."
                 ),
+            ),
+            _metric(
+                "Bars repaired",
+                _repaired_share(quality),
+                _repaired_display(quality),
+                tone=(
+                    "neutral"
+                    if _repaired_share(quality) is None
+                    else ("warn" if _repaired_share(quality) > 0 else "ok")
+                ),
+                help_text="Bars whose high/low bounds were invalid in the vendor feed and "
+                "had to be repaired before use. Yahoo's OTC FX composites carry a "
+                "measurable share of these; the quality gate's thresholds in "
+                "configs/data.yaml decide whether that warns or fails.",
             ),
             _metric(
                 "Volume usable",
@@ -365,8 +409,46 @@ def market_panel(data: dict[str, Any]) -> dict[str, Any]:
             ),
         ],
         "quality_detail": quality,
+        "quality_findings": quality_rows(data),
+        "quality_stats": dict(quality.get("stats") or {}),
         "freshness_detail": freshness,
     }
+
+
+def quality_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """The data-quality gate's findings, worst first, as displayable rows.
+
+    The gate's report is the authority on whether a feed is usable, so its
+    findings get a table of their own rather than a stringified dict in an
+    expander. Each row keeps the finding's severity, how many bars it touched
+    and what fraction of the series that is - the FX feeds' OHLC-bound defects
+    are a percentage-of-bars problem, and a message without its ratio cannot be
+    weighed against the thresholds in configs/data.yaml.
+    """
+    quality = (data.get("market") or {}).get("quality") or {}
+    order = {"FAIL": 0, "WARNING": 1, "PASS": 2}
+    rows = []
+    for issue in quality.get("issues") or []:
+        if not isinstance(issue, dict):
+            rows.append({"code": "unknown", "severity": "UNKNOWN", "message": str(issue),
+                         "bars": None, "share": None, "share_display": "n/a",
+                         "tone": "warn", "samples": []})
+            continue
+        severity = str(issue.get("severity", "UNKNOWN")).upper()
+        ratio = issue.get("ratio")
+        rows.append(
+            {
+                "code": str(issue.get("code", "unknown")),
+                "severity": severity,
+                "message": str(issue.get("message", "")),
+                "bars": issue.get("count"),
+                "share": ratio,
+                "share_display": "n/a" if ratio is None else _pct(ratio),
+                "tone": _tone(severity),
+                "samples": list(issue.get("samples") or []),
+            }
+        )
+    return sorted(rows, key=lambda r: (order.get(r["severity"], 3), r["code"]))
 
 
 def regime_panel(data: dict[str, Any]) -> dict[str, Any]:
@@ -752,6 +834,148 @@ def trade_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def performance_panel(data: dict[str, Any]) -> dict[str, Any]:
+    """Realised performance by strategy and by regime.
+
+    Rows come straight from :func:`app.paper_trading.performance.build_performance`,
+    which computes them from closed trades only. The panel's job is formatting
+    and one piece of emphasis: a row whose sample is below the selector's
+    evidence threshold is marked, so a mean R from three trades cannot be read
+    beside one from ninety as though they carried the same weight.
+    """
+    perf = data.get("performance") or {}
+    overall = perf.get("overall") or {}
+    currency = (data.get("portfolio") or {}).get("currency", "USD")
+
+    def row(source: dict[str, Any], name_key: str) -> dict[str, Any]:
+        expectancy = source.get("expectancy_r")
+        factor = source.get("profit_factor")
+        return {
+            name_key: source.get(name_key),
+            "trades": source.get("trades"),
+            "wins": source.get("wins"),
+            "losses": source.get("losses"),
+            "win_rate": source.get("win_rate"),
+            "win_rate_display": _pct(source.get("win_rate"), 0),
+            "expectancy_r": expectancy,
+            "expectancy_display": "n/a" if expectancy is None else f"{expectancy:+.2f}R",
+            "total_r": source.get("total_r"),
+            "net_pnl": source.get("net_pnl"),
+            "net_display": _money(source.get("net_pnl"), currency),
+            "profit_factor": factor,
+            "profit_factor_display": (
+                "no losses in sample" if factor is None else f"{factor:.2f}"
+            ),
+            "costs": source.get("costs"),
+            "avg_bars_held": source.get("avg_bars_held"),
+            "ambiguous_exits": source.get("ambiguous_exits"),
+            "insufficient_evidence": bool(source.get("insufficient_evidence")),
+            "evidence_display": (
+                f"sample only (<{source.get('min_samples')})"
+                if source.get("insufficient_evidence")
+                else "meets threshold"
+            ),
+            "verdict": source.get("verdict"),
+            "tone": "warn" if source.get("insufficient_evidence") else "neutral",
+        }
+
+    pair_rows = []
+    for item in perf.get("by_strategy_regime") or []:
+        merged = row(item, "strategy")
+        merged["regime"] = item.get("regime")
+        pair_rows.append(merged)
+
+    selector_rows = []
+    for item in perf.get("selector_table") or []:
+        mean_r = item.get("mean_r")
+        selector_rows.append(
+            {
+                "strategy": item.get("strategy"),
+                "regime": item.get("regime"),
+                "samples": item.get("samples"),
+                "mean_r": mean_r,
+                "mean_r_display": "n/a" if mean_r is None else f"{mean_r:+.2f}R",
+                "win_rate_display": _pct(item.get("win_rate"), 0),
+                "influences_weight": bool(item.get("influences_weight")),
+                "influence_display": (
+                    "moves the weight"
+                    if item.get("influences_weight")
+                    else f"below {item.get('min_samples')} samples - weight unaffected"
+                ),
+                "tone": "ok" if item.get("influences_weight") else "neutral",
+            }
+        )
+
+    has_trades = bool(overall.get("trades"))
+    return {
+        "has_trades": has_trades,
+        "basis": perf.get("basis"),
+        "verdict": overall.get("verdict")
+        or "No closed trade yet, so there is nothing measured.",
+        "metrics": [
+            _metric("Closed trades", overall.get("trades") or 0),
+            _metric(
+                "Win rate",
+                overall.get("win_rate"),
+                _pct(overall.get("win_rate"), 0),
+                help_text="Share of closed trades with positive net P&L. A high win rate "
+                "does not imply profitability and is not a target.",
+            ),
+            _metric(
+                "Expectancy",
+                overall.get("expectancy_r"),
+                "n/a"
+                if overall.get("expectancy_r") is None
+                else f"{overall['expectancy_r']:+.2f}R",
+                tone="warn" if overall.get("insufficient_evidence") else "neutral",
+                help_text="Mean R multiple across closed trades, the only per-trade figure "
+                "comparable across instruments and position sizes.",
+            ),
+            _metric(
+                "Profit factor",
+                overall.get("profit_factor"),
+                "no losses in sample"
+                if overall.get("profit_factor") is None
+                else f"{overall['profit_factor']:.2f}",
+            ),
+            _metric(
+                "Net realised",
+                overall.get("net_pnl"),
+                _money(overall.get("net_pnl"), currency),
+                help_text="From closed trades only, net of simulated costs.",
+            ),
+            _metric(
+                "Costs paid",
+                overall.get("costs"),
+                _money(overall.get("costs"), currency),
+            ),
+            _metric(
+                "Still open",
+                perf.get("open_positions") or 0,
+                help_text="Excluded from every figure here: an open position has a mark, "
+                "not an outcome.",
+            ),
+            _metric(
+                "Ambiguous exits",
+                overall.get("ambiguous_exits") or 0,
+                help_text="Trades closed on a bar whose range held both the stop and the "
+                "target. OHLC cannot say which came first; execution."
+                "same_bar_resolution decided.",
+            ),
+        ],
+        "by_strategy": [row(item, "strategy") for item in perf.get("by_strategy") or []],
+        "by_contributor": [
+            row(item, "strategy") for item in perf.get("by_contributor") or []
+        ],
+        "contributor_note": perf.get("contributor_note"),
+        "by_regime": [row(item, "regime") for item in perf.get("by_regime") or []],
+        "by_strategy_regime": pair_rows,
+        "by_exit_reason": list(perf.get("by_exit_reason") or []),
+        "selector_table": selector_rows,
+        "min_samples": perf.get("min_samples"),
+    }
+
+
 # ---------------------------------------------------------------------- graph
 
 
@@ -802,6 +1026,8 @@ def graph_figure_spec(graph: dict[str, Any]) -> dict[str, Any]:
         ],
         "legend": dict(graph.get("legend") or {}),
         "path": list(graph.get("path") or []),
+        "stopped_at": graph.get("stopped_at"),
+        "stopped_reason": graph.get("stopped_reason"),
         "summary": _graph_summary(graph),
     }
 
@@ -822,30 +1048,47 @@ def _stage_pairs(nodes: list[dict[str, Any]]) -> list[tuple[int, str]]:
 
 
 def _graph_summary(graph: dict[str, Any]) -> str:
-    """One sentence describing how far the bar got and what stopped it."""
-    path = list(graph.get("path") or [])
+    """One sentence describing how far the bar got and what stopped it.
+
+    Reads ``path``/``stopped_at`` rather than node colours. A bar can complete
+    every stage on data the quality gate has caveated; saying it "did not
+    progress" because the feed is stale would be false, and the caveat has its
+    own banner.
+    """
     nodes = {n["id"]: n for n in graph.get("nodes") or []}
+    if not nodes:
+        return "The graph has no recorded state."
+
+    path = list(graph.get("path") or [])
+    stopped_at = graph.get("stopped_at")
+
+    def label(node_id: Any) -> str:
+        return str(nodes.get(str(node_id), {}).get("label", node_id)).replace("\n", " ")
+
+    parts: list[str] = []
     if not path:
-        first = nodes.get("market_data")
-        if first is None:
-            return "The graph has no recorded state."
-        return f"Nothing progressed past market data: {first.get('detail', '')}"
+        detail = graph.get("stopped_reason") or nodes.get("market_data", {}).get("detail", "")
+        parts.append(f"The pipeline did not start: {detail}".strip())
+    elif stopped_at:
+        parts.append(f"The bar reached {label(stopped_at)} and stopped there.")
+        if graph.get("stopped_reason"):
+            parts.append(str(graph["stopped_reason"]))
+    else:
+        parts.append(f"The bar completed every stage through to {label(path[-1])}.")
 
-    last = path[-1]
-    blocks = graph.get("risk_blocks") or []
-    suppressed = graph.get("suppressed") or []
-    failed = graph.get("failed") or []
-
-    parts = [f"The bar reached {nodes.get(last, {}).get('label', last)}."]
-    if failed:
-        parts.append(f"Failed node(s): {', '.join(failed)}.")
-    if suppressed:
-        parts.append(f"Suppressed strategies: {', '.join(suppressed)}.")
-    if blocks:
-        parts.append(f"Risk blocked the trade: {'; '.join(str(b) for b in blocks)}.")
+    if graph.get("failed"):
+        parts.append(f"Failed node(s): {', '.join(graph['failed'])}.")
+    if graph.get("suppressed"):
+        parts.append(f"Suppressed strategies: {', '.join(graph['suppressed'])}.")
+    if graph.get("rejected"):
+        parts.append(f"Strategies that declined: {', '.join(graph['rejected'])}.")
+    if graph.get("risk_blocks"):
+        parts.append(
+            f"Risk blocked the trade: {'; '.join(str(b) for b in graph['risk_blocks'])}."
+        )
     if graph.get("final_decision"):
         parts.append(f"Final decision: {graph['final_decision']}.")
-    return " ".join(parts)
+    return " ".join(p for p in parts if p)
 
 
 # ----------------------------------------------------------------- whole page
@@ -863,6 +1106,8 @@ def build_view(data: dict[str, Any]) -> dict[str, Any]:
         "decision": decision_panel(data),
         "portfolio": portfolio_panel(data),
         "execution": execution_panel(data),
+        "performance": performance_panel(data),
+        "quality_findings": quality_rows(data),
         "trades": trade_rows(data),
         "graph": graph,
         "graph_figure": graph_figure_spec(graph),

@@ -22,7 +22,7 @@ networkx>=3.2          # graph analysis / visualisation
 scikit-learn>=1.4
 
 # --- Visualisation & dashboard (phase 5) ---
-streamlit>=1.31
+streamlit>=1.49          # width="stretch" replaces the removed use_container_width
 plotly>=5.18
 matplotlib>=3.8
 

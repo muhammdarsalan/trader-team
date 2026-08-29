@@ -8,6 +8,16 @@ Two sources of bars, one code path:
     # fetch the newest bars and process whatever has not been seen
     python scripts/run_paper_trading.py --symbol XAUUSD --timeframe 1D --live
 
+    # replay your own file: drop data/raw/XAUUSD_1D.csv, then
+    python scripts/run_paper_trading.py --symbol XAUUSD --timeframe 1D --provider csv
+
+    # look at a session without advancing it
+    python scripts/run_paper_trading.py --symbol XAUUSD --timeframe 1D --status
+
+The only difference between replay and live is where the frame comes from. Both
+call the same :meth:`PaperTradingEngine.process_bar`, so a behaviour that holds
+in one holds in the other.
+
 State persists to data/paper/<SYMBOL>_<TIMEFRAME>.json and is reloaded on the
 next run, so a session survives a restart and re-running overlapping bars is a
 no-op rather than a duplicate trade.
@@ -25,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config.loader import get_config  # noqa: E402
+from app.data.loaders.registry import available_providers, get_provider  # noqa: E402
 from app.data.service import MarketDataService  # noqa: E402
 from app.data.validators.quality import DataQualityError  # noqa: E402
 from app.paper_trading.engine import PaperTradingEngine  # noqa: E402
@@ -51,6 +62,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--live",
         action="store_true",
         help="Fetch the newest bars from the configured provider and process them",
+    )
+    source.add_argument(
+        "--status",
+        action="store_true",
+        help="Print the saved session state and exit without processing any bar",
+    )
+
+    parser.add_argument(
+        "--provider",
+        "-p",
+        default=None,
+        help="Data provider for this run. Available: "
+        f"{', '.join(available_providers())}. Defaults to data.default_provider. "
+        "Use 'csv' to replay your own data/raw/<SYMBOL>_<TIMEFRAME>.csv.",
     )
 
     parser.add_argument("--start", default="2020-01-01", help="Replay start date")
@@ -143,6 +168,16 @@ def _print_status(engine: PaperTradingEngine) -> None:
         f"fills={len(state.get('fills') or [])} "
         f"pending orders={len(state.get('pending_orders') or [])}"
     )
+    performance = engine.performance_view()
+    overall = performance.get("overall") or {}
+    print(f"Realised    : {overall.get('verdict')}")
+    for row in (performance.get("by_contributor") or [])[:5]:
+        expectancy = row.get("expectancy_r")
+        print(
+            f"              {row['strategy']}: {row['trades']} trade(s), "
+            + ("no defined R" if expectancy is None else f"mean {expectancy:+.2f}R")
+            + ("  [sample only]" if row.get("insufficient_evidence") else "")
+        )
     print(f"Health      : {health.get('status')}")
     for reason in health.get("reasons") or []:
         print(f"              - {reason}")
@@ -157,10 +192,46 @@ def _print_status(engine: PaperTradingEngine) -> None:
     print("Live trading: DISABLED (simulation only, no broker integration exists)")
 
 
+def build_service(args: argparse.Namespace) -> MarketDataService | None:
+    """The data service for this run, or None to use the configured default.
+
+    A paper session must be runnable on the operator's own bars: the Yahoo feeds
+    are free but caveated, and "drop a CSV in data/raw and point the run at it"
+    is the documented escape hatch. Without ``--provider`` the paper runner was
+    the one entry point that could not take it.
+
+    Returning None rather than a default service keeps the engine's lazy
+    construction intact - ``--status`` must not reach for provider configuration
+    it never uses.
+    """
+    if not args.provider:
+        return None
+    config = get_config()
+    provider = get_provider(
+        args.provider,
+        assets=config.assets,
+        config=config.data.provider(args.provider),
+    )
+    return MarketDataService(provider=provider)
+
+
+def run_status(engine: PaperTradingEngine) -> int:
+    """Report the saved session without touching it."""
+    if engine.state_path is None or not engine.state_path.exists():
+        print(
+            f"No saved session at {engine.state_path}. Start one with --replay or --live; "
+            "nothing is reported for a session that has not run."
+        )
+        return 1
+    _print_status(engine)
+    return 0
+
+
 def run_replay(engine: PaperTradingEngine, args: argparse.Namespace) -> int:
-    service = MarketDataService()
+    # The engine's own service, so replay and live read the same source and a
+    # --provider override cannot apply to only one of them.
     try:
-        result = service.get_historical_data(
+        result = engine.market_data_service.get_historical_data(
             args.symbol, args.timeframe, start=args.start, end=args.end
         )
     except DataQualityError as exc:
@@ -175,7 +246,9 @@ def run_replay(engine: PaperTradingEngine, args: argparse.Namespace) -> int:
         f"Replaying {len(result.data)} bars of {args.symbol} {args.timeframe} "
         f"(quality={quality})"
     )
-    outputs = engine.catch_up(result.data, data_quality=quality)
+    # The full report, not just the grade: the dashboard shows the gate's
+    # findings, and the grade alone cannot say what was wrong with the feed.
+    outputs = engine.catch_up(result.data, data_quality=result.quality)
     print(f"Processed {len(outputs)} new bar(s).")
     _print_status(engine)
     return 0
@@ -207,10 +280,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Unknown symbol {symbol!r}. Configured assets: {known}")
         return 1
 
+    if args.provider and args.provider not in available_providers():
+        known = ", ".join(available_providers())
+        print(f"Unknown provider {args.provider!r}. Available: {known}")
+        return 1
+
     state_path = (
         Path(args.state) if args.state else paper_state_path(symbol, args.timeframe)
     )
-    if args.reset:
+    # --status reports; it never mutates. Archiving the file it was asked to
+    # read would leave nothing to report and destroy the session in passing.
+    if args.reset and not args.status:
         archived = _archive_existing(state_path)
         if archived is not None:
             print(f"Previous state archived to {archived}")
@@ -220,14 +300,17 @@ def main(argv: list[str] | None = None) -> int:
         symbol=symbol,
         timeframe=args.timeframe,
         state_path=state_path,
+        market_data_service=build_service(args),
     )
 
-    if not engine.trading_enabled:
+    if not engine.trading_enabled and not args.status:
         print(
             "Note: platform.trading_enabled is false, so no paper orders will be "
             "created. Signals, regimes and risk decisions are still recorded."
         )
 
+    if args.status:
+        return run_status(engine)
     return run_live(engine, args) if args.live else run_replay(engine, args)
 
 

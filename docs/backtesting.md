@@ -281,3 +281,13 @@ NO-TRADE DECISIONS
 
 Knowing *why* nothing happened is what distinguishes "the strategy saw nothing"
 from "the strategy was broken and produced nothing".
+
+---
+
+## The same model, driven live-ish
+
+[`PaperTradingEngine`](../app/paper_trading/engine.py) runs this exact sequence
+against a refreshed vendor feed or replayed history, using the same simulator,
+risk engine, graph and portfolio. It is not a second execution model, and a test
+compares every field of every trade the two engines produce over one frame to
+keep it that way. See [paper_trading.md](paper_trading.md).

@@ -14,6 +14,13 @@ nodes. A node here is ``PENDING`` until something recorded says otherwise.
 Second, **layout is data.** Node coordinates are computed here rather than in
 the Streamlit layer, so the arrangement of the graph can be asserted in a test
 without a browser or a rendering runtime.
+
+Third, **"how far did the bar get" is separate from "was the answer good".** A
+node carries both a ``status`` - the amber/red reading a human needs - and a
+``reached`` flag saying whether the stage actually ran. Collapsing the two used
+to make a fully-completed decision on stale data report that "nothing
+progressed past market data", which was simply false: every stage had run. The
+path now follows ``reached``, and the caveat stays visible in the status.
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ from typing import Any
 __all__ = [
     "NODE_STATUS_COLOURS",
     "STAGES",
+    "TRUNK",
     "build_graph_visualization",
 ]
 
@@ -80,7 +88,7 @@ def build_graph_visualization(
     Returns:
         A JSON-safe dict with ``nodes``, ``edges``, ``active_nodes``,
         ``suppressed``, ``rejected``, ``risk_blocks``, ``failed``, ``path``,
-        ``final_decision`` and ``legend``.
+        ``stopped_at``, ``stopped_reason``, ``final_decision`` and ``legend``.
     """
     view = _coerce(source)
 
@@ -109,6 +117,8 @@ def build_graph_visualization(
     by_id = {node["id"]: node for node in nodes}
     active = sorted(nid for nid, node in by_id.items() if node["status"] == "ACTIVE")
 
+    path, stopped_at, stopped_reason = _path(by_id)
+
     risk_blocks: list[str] = []
     if risk is not None and not risk["approved"]:
         risk_blocks.append(risk["block_reason"] or risk["verdict"])
@@ -121,7 +131,9 @@ def build_graph_visualization(
         "rejected": sorted(s["strategy"] for s in strategies if not s["actionable"]),
         "risk_blocks": risk_blocks,
         "failed": sorted(failed),
-        "path": _path(by_id),
+        "path": path,
+        "stopped_at": stopped_at,
+        "stopped_reason": stopped_reason,
         "final_decision": view["decision"],
         "timestamp": view["timestamp"],
         "legend": dict(NODE_STATUS_COLOURS),
@@ -171,6 +183,15 @@ def _coerce(source: Any) -> dict[str, Any]:
         {str(e.get("node")) for e in errors if isinstance(e, dict) and e.get("node")}
     )
 
+    # A raw TradingState has no "warm" field - that is added by
+    # build_decision_view. Inferring it from downstream evidence is not a guess:
+    # a regime or a strategy signal exists only if the feature stage ran, and
+    # reporting features as PENDING while a strategy node has reported would
+    # truncate the path at a stage that demonstrably completed.
+    warm = source.get("warm")
+    if warm is None and (strategies or source.get("regime") is not None):
+        warm = True
+
     return {
         "strategies": strategies,
         "failed": failed,
@@ -180,7 +201,7 @@ def _coerce(source: Any) -> dict[str, Any]:
         "order": source.get("order"),
         "decision": source.get("decision"),
         "timestamp": _as_str(source.get("timestamp")),
-        "warm": source.get("warm"),
+        "warm": warm,
         "skipped_reason": source.get("skipped_reason"),
     }
 
@@ -317,8 +338,22 @@ def _node(
     stage: str,
     status: str,
     detail: str,
+    *,
+    reached: bool | None = None,
+    terminal: bool = False,
     **metrics: Any,
 ) -> dict[str, Any]:
+    """One graph node.
+
+    Args:
+        reached: whether this stage actually ran and recorded a result. Defaults
+            to "any status other than PENDING or ERROR", which is right for
+            every node that does not need to say otherwise. It is deliberately
+            *not* derived from whether the answer was favourable: a stage that
+            ran and declined, or ran on caveated data, was still reached.
+        terminal: whether the flow stopped here. A warm-up skip, a risk refusal
+            and a kill switch all reach their stage and end the bar there.
+    """
     return {
         "id": node_id,
         "label": label,
@@ -326,6 +361,8 @@ def _node(
         "status": status,
         "detail": detail,
         "colour": NODE_STATUS_COLOURS.get(status, NODE_STATUS_COLOURS["PENDING"]),
+        "reached": (status not in {"PENDING", "ERROR"}) if reached is None else bool(reached),
+        "terminal": bool(terminal),
         "metrics": {k: v for k, v in metrics.items() if v is not None},
     }
 
@@ -333,34 +370,62 @@ def _node(
 def _market_node(market: dict[str, Any] | None, failed: set[str]) -> dict[str, Any]:
     if "market_data" in failed:
         return _node("market_data", "Market Data", "market_data", "ERROR",
-                     "The market-data node failed for this bar.")
+                     "The market-data node failed for this bar.", terminal=True)
     if not market or market.get("status") == "NO_DATA":
         return _node(
             "market_data", "Market Data", "market_data", "PENDING",
             "No market data has been loaded, so nothing downstream has run.",
+            terminal=True,
         )
-    if market.get("status") == "ERROR":
+    if market.get("status") in {"ERROR", "EMPTY"}:
         return _node(
             "market_data", "Market Data", "market_data", "ERROR",
-            str(market.get("error") or "The market-data refresh failed."),
+            str(
+                market.get("error")
+                or (
+                    "The provider returned no bars."
+                    if market.get("status") == "EMPTY"
+                    else "The market-data refresh failed."
+                )
+            ),
+            terminal=True,
         )
 
     quality = str(market.get("quality_status", "UNKNOWN"))
     freshness = str((market.get("freshness") or {}).get("status", "UNKNOWN"))
     rows = market.get("rows") or 0
-    status = "OK"
-    if quality in {"FAIL", "UNKNOWN"} or freshness in {"STALE", "UNKNOWN"}:
-        status = "WAIT"
+
+    # Bars were delivered, so the stage ran: `reached` stays True. The status
+    # still carries the caveat, because a feed graded FAIL or gone stale must
+    # not read the same as a clean current one - it is the reason risk will
+    # refuse, and it belongs in amber on the picture.
+    caveats: list[str] = []
+    if quality == "FAIL":
+        caveats.append("the quality gate graded this feed FAIL")
+    elif quality == "UNKNOWN":
+        caveats.append("no quality grade was recorded, which risk treats as a refusal")
+    elif quality == "WARNING":
+        caveats.append("the quality gate graded this feed WARNING")
+    if freshness == "STALE":
+        caveats.append("the newest bar is stale")
+    elif freshness == "UNKNOWN":
+        caveats.append("the feed's age could not be established")
+    if market.get("is_proxy"):
+        caveats.append("the series is a labelled proxy, not the instrument itself")
+
+    status = "WAIT" if quality in {"FAIL", "UNKNOWN"} or freshness in {"STALE", "UNKNOWN"} else "OK"
     detail = (
         f"{rows:,} bars from {market.get('provider', 'unknown')}, "
         f"quality {quality}, freshness {freshness}."
     )
-    if market.get("is_proxy"):
-        detail += " Series is a labelled proxy, not the instrument itself."
+    if caveats:
+        detail += " Caveats: " + "; ".join(caveats) + "."
     return _node(
         "market_data", "Market Data", "market_data", status, detail,
+        reached=True,
         rows=rows, quality=quality, freshness=freshness,
         provider=market.get("provider"), last_bar=market.get("last_bar"),
+        caveats=caveats or None,
     )
 
 
@@ -369,15 +434,16 @@ def _features_node(
 ) -> dict[str, Any]:
     if "features" in failed:
         return _node("features", "Features", "features", "ERROR",
-                     "Feature computation failed for this bar.")
+                     "Feature computation failed for this bar.", terminal=True)
     if warm is None:
         return _node("features", "Features", "features", "PENDING",
-                     "No bar has been analysed yet.")
+                     "No bar has been analysed yet.", terminal=True)
     if not warm:
         return _node(
             "features", "Features", "features", "WARMUP",
             skipped_reason
             or "The bar is inside the feature warm-up period, so no decision was taken.",
+            terminal=True,
         )
     return _node("features", "Features", "features", "OK",
                  "Causal features computed and past warm-up.")
@@ -386,9 +452,10 @@ def _features_node(
 def _regime_node(regime: dict[str, Any] | None, failed: set[str]) -> dict[str, Any]:
     if "regime" in failed:
         return _node("regime", "Regime", "regime", "ERROR",
-                     "Regime detection failed for this bar.")
+                     "Regime detection failed for this bar.", terminal=True)
     if regime is None:
-        return _node("regime", "Regime", "regime", "PENDING", "Regime not yet detected.")
+        return _node("regime", "Regime", "regime", "PENDING", "Regime not yet detected.",
+                     terminal=True)
     confidence = regime.get("confidence")
     suffix = "" if confidence is None else f" at {confidence:.0%} confidence"
     label = regime["regime"]
@@ -406,7 +473,7 @@ def _strategy_nodes(
     if not strategies:
         return [
             _node("strategies", "Strategies", "strategies", "PENDING",
-                  "No strategy has reported yet.")
+                  "No strategy has reported yet.", terminal=True)
         ]
 
     nodes = []
@@ -448,11 +515,11 @@ def _selection_node(
 ) -> dict[str, Any]:
     if "selection" in failed:
         return _node("selection", "Selection", "selection", "ERROR",
-                     "Strategy selection failed for this bar.")
+                     "Strategy selection failed for this bar.", terminal=True)
     weighted = [s for s in strategies if s.get("weight") is not None]
     if not weighted:
         return _node("selection", "Selection", "selection", "PENDING",
-                     "The selector has not weighted any strategy yet.")
+                     "The selector has not weighted any strategy yet.", terminal=True)
     live = [s for s in weighted if not s["suppressed"]]
     status = "OK" if live else "WAIT"
     detail = (
@@ -468,10 +535,10 @@ def _aggregation_node(
 ) -> dict[str, Any]:
     if "aggregation" in failed or "strategy_aggregation" in failed:
         return _node("aggregation", "Aggregation", "aggregation", "ERROR",
-                     "Signal aggregation failed for this bar.")
+                     "Signal aggregation failed for this bar.", terminal=True)
     if aggregation is None:
         return _node("aggregation", "Aggregation", "aggregation", "PENDING",
-                     "No aggregated decision yet.")
+                     "No aggregated decision yet.", terminal=True)
     status = "ACTIVE" if aggregation["actionable"] else "WAIT"
     contributing = ", ".join(aggregation["contributing"]) or "none"
     detail = (
@@ -483,6 +550,7 @@ def _aggregation_node(
     return _node(
         "aggregation", f"Aggregation\n{aggregation['direction']}", "aggregation",
         status, detail,
+        terminal=not aggregation["actionable"],
         direction=aggregation["direction"], confidence=aggregation["confidence"],
     )
 
@@ -490,15 +558,17 @@ def _aggregation_node(
 def _risk_node(risk: dict[str, Any] | None, failed: set[str]) -> dict[str, Any]:
     if "risk" in failed:
         return _node("risk", "Risk", "risk", "ERROR",
-                     "The risk node failed, which is treated as a refusal.")
+                     "The risk node failed, which is treated as a refusal.", terminal=True)
     if risk is None:
-        return _node("risk", "Risk", "risk", "PENDING", "Risk has not evaluated a signal.")
+        return _node("risk", "Risk", "risk", "PENDING", "Risk has not evaluated a signal.",
+                     terminal=True)
     if not risk["approved"]:
         reason = risk["block_reason"] or risk["verdict"]
         detail = f"Refused: {reason}."
         if risk["reasoning"]:
             detail += f" {risk['reasoning'][0]}"
         return _node("risk", "Risk\nBLOCKED", "risk", "BLOCKED", detail,
+                     terminal=True,
                      block_reason=reason, verdict=risk["verdict"])
     quantity = risk["quantity"]
     amount = risk["risk_amount"]
@@ -519,7 +589,7 @@ def _execution_node(
 ) -> dict[str, Any]:
     if "order" in failed or "execution" in failed:
         return _node("execution", "Execution", "execution", "ERROR",
-                     "Order construction failed for this bar.")
+                     "Order construction failed for this bar.", terminal=True)
     # A refusal outranks the presence of an order. The graph only routes to order
     # construction after an approval, so the two together mean something is
     # inconsistent - and in that case the safe reading is the refusal.
@@ -530,7 +600,7 @@ def _execution_node(
                 "Risk refused the signal, yet an order is present in the record. "
                 "The refusal is what is reported; treat the order as suspect."
             )
-        return _node("execution", "Execution", "execution", "BLOCKED", detail)
+        return _node("execution", "Execution", "execution", "BLOCKED", detail, terminal=True)
     if order is not None:
         return _node(
             "execution", "Execution\nPAPER ORDER", "execution", "ACTIVE",
@@ -542,18 +612,19 @@ def _execution_node(
             "execution", "Execution", "execution", "BLOCKED",
             "trading_enabled is false: the kill switch is on, so no order is "
             "created even when a signal and risk would allow one.",
+            terminal=True,
         )
     if risk is None:
         return _node("execution", "Execution", "execution", "PENDING",
-                     "Nothing has reached execution yet.")
+                     "Nothing has reached execution yet.", terminal=True)
     return _node("execution", "Execution", "execution", "WAIT",
-                 "No actionable signal, so there was nothing to execute.")
+                 "No actionable signal, so there was nothing to execute.", terminal=True)
 
 
 def _position_node(open_positions: int | None, order: Any) -> dict[str, Any]:
     if open_positions is None:
         return _node("paper_position", "Paper Position", "paper_position", "PENDING",
-                     "Position state unknown.")
+                     "Position state unknown.", terminal=True)
     if open_positions > 0:
         return _node(
             "paper_position", f"Paper Position\n{open_positions} open", "paper_position",
@@ -610,20 +681,34 @@ def _assign_layout(nodes: list[dict[str, Any]]) -> None:
             node["row"] = float(offset) - (count - 1) / 2.0
 
 
-def _path(by_id: dict[str, dict[str, Any]]) -> list[str]:
-    """The trunk stages that are on the live path, in pipeline order.
+#: Trunk stages, in pipeline order. The strategy fan-out sits between ``regime``
+#: and ``selection`` and is not part of the trunk: individual strategies
+#: declining is normal and does not stop the bar.
+TRUNK: tuple[str, ...] = (
+    "market_data", "features", "regime", "selection",
+    "aggregation", "risk", "execution", "paper_position",
+)
 
-    Stops at the first stage that is not ACTIVE or OK, which is what makes the
-    view answer "how far did this bar get" at a glance.
+
+def _path(by_id: dict[str, dict[str, Any]]) -> tuple[list[str], str | None, str | None]:
+    """How far the bar got, where it stopped, and why.
+
+    A stage is on the path when it was *reached* - it ran and recorded a result.
+    That is not the same as the result being favourable, and conflating the two
+    is what used to make a completed decision over stale data report that
+    nothing had progressed past market data.
+
+    A terminal stage is included and then ends the walk: risk refusing a signal
+    is a stage that ran, reached its conclusion, and stopped the bar there.
     """
-    trunk = [
-        "market_data", "features", "regime", "selection",
-        "aggregation", "risk", "execution", "paper_position",
-    ]
-    path = []
-    for node_id in trunk:
+    path: list[str] = []
+    for node_id in TRUNK:
         node = by_id.get(node_id)
-        if node is None or node["status"] not in {"ACTIVE", "OK"}:
-            break
+        if node is None or not node.get("reached"):
+            return path, node_id if node is not None else None, (
+                None if node is None else str(node.get("detail") or "")
+            )
         path.append(node_id)
-    return path
+        if node.get("terminal"):
+            return path, node_id, str(node.get("detail") or "")
+    return path, None, None

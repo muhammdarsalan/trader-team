@@ -83,7 +83,7 @@ def _table(rows: list[dict[str, Any]], columns: list[tuple[str, str]]) -> None:
     frame = pd.DataFrame(
         [{title: row.get(key) for key, title in columns} for row in rows]
     )
-    st.dataframe(frame, use_container_width=True, hide_index=True)
+    st.dataframe(frame, width="stretch", hide_index=True)
 
 
 # --------------------------------------------------------------------- sections
@@ -124,11 +124,37 @@ def render_market(view: dict[str, Any]) -> None:
     _metric_columns(market["metrics"])
     if market.get("caveat"):
         st.caption(f"Data caveat: {market['caveat']}")
-    issues = (market.get("quality_detail") or {}).get("issues")
-    if issues:
-        with st.expander("Data-quality findings"):
-            for issue in issues:
-                st.write(f"- {issue}")
+
+    findings = market.get("quality_findings") or []
+    if findings:
+        worst = findings[0]
+        header = (
+            f"Data-quality findings ({len(findings)}) — worst: "
+            f"{worst['severity']} {worst['code']}"
+        )
+        with st.expander(header, expanded=worst["severity"] == "FAIL"):
+            st.caption(
+                "The quality gate is authoritative: these findings are what decided the "
+                "grade above, and the grade is what the risk engine sizes against."
+            )
+            _table(
+                findings,
+                [
+                    ("severity", "Severity"),
+                    ("code", "Finding"),
+                    ("bars", "Bars"),
+                    ("share_display", "Share of series"),
+                    ("message", "Detail"),
+                ],
+            )
+            for finding in findings:
+                if finding["samples"]:
+                    st.caption(
+                        f"{finding['code']} examples: "
+                        + ", ".join(str(x) for x in finding["samples"][:5])
+                    )
+    else:
+        st.caption("The quality gate recorded no findings for this series.")
 
 
 def render_regime(view: dict[str, Any]) -> None:
@@ -148,7 +174,7 @@ def render_regime(view: dict[str, Any]) -> None:
                 pd.DataFrame(
                     [{"metric": k, "value": v} for k, v in regime["indicators"].items()]
                 ),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
@@ -347,6 +373,91 @@ def render_execution(view: dict[str, Any]) -> None:
         st.caption("No fill has been simulated yet.")
 
 
+def render_performance(view: dict[str, Any]) -> None:
+    """Realised performance, sliced by strategy and by regime."""
+    perf = view["performance"]
+    st.subheader("Performance")
+    st.caption(perf["basis"])
+
+    if not perf["has_trades"]:
+        st.info(
+            "No trade has closed yet, so there is nothing to measure. Performance here "
+            "is realised only — an open position has a mark, not an outcome."
+        )
+        return
+
+    _metric_columns(perf["metrics"], per_row=4)
+    st.write(perf["verdict"])
+
+    columns = [
+        ("trades", "Trades"),
+        ("wins", "Wins"),
+        ("losses", "Losses"),
+        ("win_rate_display", "Win rate"),
+        ("expectancy_display", "Expectancy"),
+        ("profit_factor_display", "Profit factor"),
+        ("net_display", "Net"),
+        ("avg_bars_held", "Avg bars"),
+        ("evidence_display", "Evidence"),
+    ]
+
+    st.markdown("**By contributing strategy**")
+    st.caption(perf["contributor_note"])
+    _table(perf["by_contributor"], [("strategy", "Strategy"), *columns])
+
+    st.markdown("**By signal source**")
+    st.caption(
+        "The strategy name carried on the trade itself. The aggregator signs its output "
+        "\u201censemble\u201d, so a combined decision appears under that name here and is "
+        "broken out by contributor above."
+    )
+    _table(perf["by_strategy"], [("strategy", "Strategy"), *columns])
+
+    st.markdown("**By entry regime**")
+    _table(perf["by_regime"], [("regime", "Regime"), *columns])
+
+    st.markdown("**By strategy within regime**")
+    st.caption(
+        "The pairing the selector actually weights on. Rows marked "
+        "\u201csample only\u201d are below the evidence threshold and are not moving any "
+        "weight yet."
+    )
+    _table(
+        perf["by_strategy_regime"],
+        [("strategy", "Strategy"), ("regime", "Regime"), *columns],
+    )
+
+    thin = [r for r in perf["by_strategy_regime"] if r["insufficient_evidence"]]
+    if thin:
+        st.warning(
+            f"{len(thin)} of {len(perf['by_strategy_regime'])} strategy/regime pairings "
+            f"have fewer than {perf['min_samples']} closed trades. Their expectancy is a "
+            "small sample, not evidence, and the selector does not act on it."
+        )
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**How trades ended**")
+        _table(perf["by_exit_reason"], [("exit_reason", "Exit reason"), ("trades", "Trades")])
+    with right:
+        st.markdown("**Selector's performance table**")
+        st.caption(
+            "What the strategy selector is weighting on right now. It can hold samples "
+            "from trades that have aged out of the bounded trade log above."
+        )
+        _table(
+            perf["selector_table"],
+            [
+                ("strategy", "Strategy"),
+                ("regime", "Regime"),
+                ("samples", "Samples"),
+                ("mean_r_display", "Mean R"),
+                ("win_rate_display", "Win rate"),
+                ("influence_display", "Effect on weight"),
+            ],
+        )
+
+
 def build_graph_figure(spec: dict[str, Any]) -> go.Figure:
     """Draw the decision graph: Market Data → … → Paper Position."""
     figure = go.Figure()
@@ -419,7 +530,7 @@ def render_graph(view: dict[str, Any]) -> None:
         st.info("No graph state recorded yet.")
         return
 
-    st.plotly_chart(build_graph_figure(spec), use_container_width=True)
+    st.plotly_chart(build_graph_figure(spec), width="stretch")
 
     legend = spec["legend"]
     if legend:
@@ -431,16 +542,36 @@ def render_graph(view: dict[str, Any]) -> None:
             unsafe_allow_html=True,
         )
 
-    cols = st.columns(4)
-    cols[0].metric("On the live path", len(spec["path"]))
-    cols[1].metric("Suppressed", len(graph.get("suppressed") or []))
-    cols[2].metric("Rejected", len(graph.get("rejected") or []))
-    cols[3].metric("Failed nodes", len(graph.get("failed") or []))
+    cols = st.columns(5)
+    cols[0].metric("Stages reached", len(spec["path"]))
+    cols[1].metric(
+        "Stopped at",
+        str(spec.get("stopped_at") or "completed"),
+        help=spec.get("stopped_reason") or "The bar ran through every stage.",
+    )
+    cols[2].metric("Suppressed", len(graph.get("suppressed") or []))
+    cols[3].metric("Rejected", len(graph.get("rejected") or []))
+    cols[4].metric("Failed nodes", len(graph.get("failed") or []))
+
+    if graph.get("risk_blocks"):
+        st.error("Risk blocked this bar: " + "; ".join(str(b) for b in graph["risk_blocks"]))
 
     with st.expander("Node-by-node status"):
+        st.caption(
+            "\u201cReached\u201d says the stage ran and recorded a result; \u201cstatus\u201d "
+            "says what it concluded. A stage can be reached and still be amber — a feed "
+            "the quality gate caveated, or a strategy that declined to act."
+        )
         _table(
             graph.get("nodes") or [],
-            [("label", "Node"), ("stage", "Stage"), ("status", "Status"), ("detail", "Detail")],
+            [
+                ("label", "Node"),
+                ("stage", "Stage"),
+                ("status", "Status"),
+                ("reached", "Reached"),
+                ("terminal", "Ended the bar"),
+                ("detail", "Detail"),
+            ],
         )
 
 
@@ -476,7 +607,7 @@ def render_dashboard(engine: PaperTradingEngine | None = None) -> dict[str, Any]
     render_header(view)
     tabs = st.tabs(
         ["Market & regime", "Strategies & decision", "Portfolio", "Execution",
-         "Graph", "Activity"]
+         "Performance", "Graph", "Activity"]
     )
     with tabs[0]:
         render_market(view)
@@ -491,8 +622,10 @@ def render_dashboard(engine: PaperTradingEngine | None = None) -> dict[str, Any]
     with tabs[3]:
         render_execution(view)
     with tabs[4]:
-        render_graph(view)
+        render_performance(view)
     with tabs[5]:
+        render_graph(view)
+    with tabs[6]:
         render_activity(view)
     return view
 
