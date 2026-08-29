@@ -114,9 +114,9 @@ expression. `pytest -m network` is the deliberate case: it runs only the live
 test, and fails without a reachable Yahoo endpoint. That is the test doing its
 job, not a defect.
 
-Measured on this commit: the default run takes about **11 minutes** (935 tests),
+Measured on this commit: the default run takes about **10 minutes** (936 tests),
 most of it in the `slow`-marked validation studies. `-m "not slow and not
-network"` takes about **4½ minutes** (906 tests).
+network"` takes about **5½ minutes** (907 tests).
 
 ---
 
