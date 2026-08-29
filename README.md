@@ -81,23 +81,36 @@ and its most common one is that a configuration has not been shown to work.
 ## Installation
 
 Requires Python 3.11+ on Windows, macOS or Linux. No Docker, no GPU, no cloud,
-no paid services.
+no paid services, no credentials.
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-# source .venv/bin/activate   # macOS / Linux
+**Windows (PowerShell)**
+
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-Optional configuration:
+**macOS / Linux**
 
 ```bash
-copy .env.example .env        # Windows
-# cp .env.example .env
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-The platform runs with **zero secrets**. `.env` only enables optional extras.
+Optional — the platform runs with **zero secrets**, and `.env` only enables
+extras you would have to switch on yourself:
+
+```powershell
+copy .env.example .env        # Windows
+```
+```bash
+cp .env.example .env          # macOS / Linux
+```
+
+Full setup, per-platform command variants, offline operation, environment
+overrides and troubleshooting: **[docs/setup.md](docs/setup.md)**.
 
 ---
 
@@ -122,8 +135,8 @@ python scripts/run_research.py --symbol XAUUSD --timeframe 1D --start 2012-01-01
 # What has already been tried against this data
 python scripts/run_research.py --list-experiments
 
-# Run the tests
-pytest -m "not network"
+# Run the tests (offline by default)
+pytest
 
 # Paper-trade over replayed history (deterministic, no network once cached)
 python scripts/run_paper_trading.py --symbol XAUUSD --timeframe 1D --start 2012-01-01
@@ -255,11 +268,20 @@ and the first banner on the dashboard.
 ## Testing
 
 ```bash
-pytest -m "not network"              # default: fully offline and deterministic
-pytest -m "not network and not slow" # skip the end-to-end validation studies
-pytest -m network                    # the one live-endpoint test
-pytest --cov=app                     # with coverage
+pytest                                 # the default run: offline, deterministic
+pytest -m "not slow and not network"   # skip the end-to-end validation studies
+pytest -m network                      # the one live-endpoint test
+pytest --cov=app                       # with coverage
 ```
+
+The single network test is deselected by `addopts` in `pyproject.toml`, so a
+clean checkout passes with no internet. A command-line `-m` **replaces** that
+expression rather than adding to it, which is why the second line spells out
+`not network` again — `pytest -m "not slow"` alone would quietly select the
+live test back in.
+
+The default run takes about 11 minutes, most of it in the `slow` validation
+studies; `-m "not slow and not network"` takes about 4½.
 
 Offline tests covering schema contracts, config validation, cleaning,
 resampling, the quality engine, cache integrity, all three providers, the
@@ -341,6 +363,7 @@ experiments/    experiment records  (gitignored)
 
 ## Documentation
 
+- [docs/setup.md](docs/setup.md) — install and run on Windows/macOS/Linux, offline operation, data limits, troubleshooting
 - [docs/data.md](docs/data.md) — sources, provenance, schema, quality, limitations
 - [docs/features.md](docs/features.md) — indicators, market structure, causality guarantees
 - [docs/strategies.md](docs/strategies.md) — the five strategies, regimes, the Signal contract

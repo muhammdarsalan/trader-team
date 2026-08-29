@@ -197,8 +197,29 @@ def override_config(config: AppConfig, **sections: Any) -> AppConfig:
             f"Unknown configuration section(s): {sorted(unknown)}. "
             f"Valid sections: {sorted(AppConfig.__dataclass_fields__)}"
         )
+
+    # Re-validate every replacement. Callers build variants with
+    # ``model_copy(update=...)``, which by design does *not* re-run validators,
+    # so without this a variant can hold a value the platform would have
+    # rejected at startup - a negative risk fraction, or TradingMode.LIVE, which
+    # PlatformConfig exists to refuse. The parameter sweep in
+    # app/research/robustness.py already re-validated for its own reason; doing
+    # it here means every caller gets the same guarantee.
+    validated: dict[str, Any] = {}
+    for name, section in sections.items():
+        model = type(section)
+        if not hasattr(model, "model_validate"):
+            validated[name] = section
+            continue
+        try:
+            validated[name] = model.model_validate(section.model_dump())
+        except ValidationError as exc:
+            raise ConfigError(
+                f"Replacement for configuration section {name!r} is invalid:\n{exc}"
+            ) from exc
+
     current = {name: getattr(config, name) for name in AppConfig.__dataclass_fields__}
-    return AppConfig(**{**current, **sections})
+    return AppConfig(**{**current, **validated})
 
 
 @lru_cache(maxsize=8)

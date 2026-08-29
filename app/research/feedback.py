@@ -230,14 +230,6 @@ class RecommendationSet:
 # ------------------------------------------------------------------- building
 
 
-def _variant_target(variant: str) -> tuple[str | None, str | None]:
-    """Split a variant name into (kind, strategy). ``weight_variants`` names them."""
-    for prefix, kind in (("halve_", "halve"), ("drop_", "drop")):
-        if variant.startswith(prefix):
-            return kind, variant[len(prefix) :]
-    return None, None
-
-
 def _walk_forward_evidence(report: ValidationReport) -> dict[str, dict[str, Any]]:
     """Per-variant out-of-sample record, from the folds that chose each one.
 

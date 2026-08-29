@@ -370,7 +370,18 @@ through. Conflating the two once made a fully-completed decision report that
 
 `path` is the trunk stages reached, in order. `stopped_at` and `stopped_reason`
 name where the bar ended and why — a warm-up skip, an aggregate that declined, a
-risk refusal, the kill switch. The view distinguishes:
+risk refusal, the kill switch.
+
+The reason has to be the one that actually operated. A bar that ended at
+aggregation did not reach execution, so the execution node stays `PENDING` even
+when the kill switch is off; it notes the switch as a standing condition rather
+than claiming it stopped this bar. The switch earns a red `BLOCKED` node only
+once risk has run — and when it stops an actionable signal, the risk engine
+records `KILL_SWITCH` and the *risk* node carries it. Before this, the shipped
+default (switch off) drew every `WAIT` bar as blocked-by-kill-switch, which made
+"no signal" and "execution off" indistinguishable and showed the wrong one.
+
+The view distinguishes:
 
 - **active** nodes — on the path to a paper trade
 - **suppressed** strategies — they signalled, and the selector weighted them to

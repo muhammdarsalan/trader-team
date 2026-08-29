@@ -46,13 +46,3 @@ def route_after_risk(state: TradingState) -> str:
     if decision is None or not decision.approved:
         return NODE_FINALISE
     return NODE_ORDER
-
-
-def should_run_strategies(state: TradingState) -> bool:
-    """Whether the strategy fan-out is worth running at all.
-
-    Kept separate from the routers because the fan-out is structural in the
-    graph; this is used by callers that build a reduced graph for analysis.
-    """
-    features = state.get("features")
-    return features is not None and not features.is_empty

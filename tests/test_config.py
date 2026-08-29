@@ -11,6 +11,7 @@ from app.config.loader import (
     load_assets,
     load_data_config,
     load_platform_config,
+    override_config,
     reset_config_cache,
 )
 from app.config.models import (
@@ -169,3 +170,46 @@ def test_fail_threshold_must_exceed_warn():
 def test_quality_ratios_are_bounded():
     with pytest.raises(ValidationError):
         QualityThresholds(max_missing_ratio_warn=1.5)
+
+
+# ------------------------------------------------------- override_config safety
+
+def test_override_config_revalidates_the_section_it_replaces(config_dir):
+    """``model_copy(update=...)`` skips validators; ``override_config`` must not.
+
+    This is the hole that made the LIVE-mode refusal a constructor-only
+    guarantee. Every research variant is built by copying a frozen section with
+    an update, and pydantic documents that such a copy is not re-validated - so
+    without this the platform's own helper was the one supported way to hold a
+    configuration the loader would have rejected outright.
+    """
+    cfg = get_config(config_dir)
+    with pytest.raises(ConfigError, match="LIVE mode is not implemented"):
+        override_config(cfg, platform=cfg.platform.model_copy(update={"mode": TradingMode.LIVE}))
+
+
+def test_override_config_rejects_an_out_of_range_variant(config_dir):
+    """A sweep must not be able to produce a risk setting the loader would refuse."""
+    cfg = get_config(config_dir)
+    with pytest.raises(ConfigError, match="risk"):
+        override_config(cfg, risk=cfg.risk.model_copy(update={"risk_per_trade": -1.0}))
+
+
+def test_override_config_still_builds_legitimate_variants(config_dir):
+    """The guard must not cost the thing the helper exists for."""
+    cfg = get_config(config_dir)
+    variant = override_config(
+        cfg, backtest=cfg.backtest.model_copy(update={"warmup_bars": 42})
+    )
+    assert variant.backtest.warmup_bars == 42
+    assert cfg.backtest.warmup_bars != 42, "the original must not be mutated"
+    assert variant.risk is cfg.risk, "untouched sections are carried over as-is"
+
+
+def test_override_config_names_the_offending_section(config_dir):
+    """The error has to say which section failed, or a sweep is undebuggable."""
+    cfg = get_config(config_dir)
+    with pytest.raises(ConfigError, match="section 'execution'"):
+        override_config(
+            cfg, execution=cfg.execution.model_copy(update={"fill_delay_bars": 0})
+        )

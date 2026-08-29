@@ -700,12 +700,34 @@ class PaperTradingEngine:
         if self.asset is not None:
             market["instrument_name"] = self.asset.name
             market["is_proxy"] = bool(self.asset.is_proxy)
-            market["data_caveat"] = self.asset.data_caveat
+            market["data_caveat"] = self._caveat_for(market.get("provider"))
             market["provider_symbol"] = self.asset.provider_symbols.get(
-                self.config.data.default_provider
+                str(market.get("provider") or self.config.data.default_provider)
             )
             market["has_reliable_volume"] = bool(self.asset.has_reliable_volume)
         return market
+
+    def _caveat_for(self, provider: Any) -> str | None:
+        """The instrument's data caveat, scoped to the provider that actually ran.
+
+        The caveats in ``configs/assets.yaml`` name their vendor - "Prices come
+        from Yahoo GC=F". That sentence is true of the mapped provider and false
+        of any other, so replaying the same symbol from a CSV drop or the
+        synthetic generator printed a provenance claim about data that had never
+        been near Yahoo. The caveat still matters (the symbol is still a proxy
+        for spot), so it is qualified rather than dropped.
+        """
+        caveat = self.asset.data_caveat if self.asset else None
+        if not caveat or provider is None:
+            return caveat
+        provider = str(provider)
+        if provider in self.asset.provider_symbols:
+            return caveat
+        return (
+            f"This series was loaded from the {provider!r} provider, which has no "
+            f"mapping in configs/assets.yaml, so the vendor named below did not "
+            f"supply it. The instrument caveat still applies to the symbol: {caveat}"
+        )
 
     def market_summary(self) -> dict[str, Any]:
         """The market lane, or an explicit NO_DATA marker when nothing is loaded."""

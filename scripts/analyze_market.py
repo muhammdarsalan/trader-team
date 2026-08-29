@@ -9,8 +9,12 @@ Examples:
     python scripts/analyze_market.py --all --timeframe 1D
 
 This is analysis only. It places no orders, simulates no fills and computes no
-performance figures - the backtester arrives in phase 3. Signals shown here are
-what the strategies *would* propose, before any risk check.
+performance figures. Signals shown here are what each strategy *would* propose
+on its own, before the selector weights them, before they are aggregated into
+one decision, and before the risk engine sizes or refuses anything.
+
+For the whole pipeline, use scripts/run_backtest.py over history or
+scripts/run_paper_trading.py for a live-ish session.
 """
 
 from __future__ import annotations
@@ -119,8 +123,9 @@ def analyse(symbol: str, args: argparse.Namespace) -> int:
     summary = ", ".join(f"{count} {name}" for name, count in sorted(directions.items()))
     print(f"Tally: {summary}")
     print(
-        "No aggregation, risk check or position sizing has been applied - "
-        "those arrive in phase 3."
+        "No aggregation, risk check or position sizing has been applied here. "
+        "Run scripts/run_backtest.py or scripts/run_paper_trading.py for the "
+        "full decision graph."
     )
 
     if args.history:

@@ -835,6 +835,19 @@ def trade_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _profit_factor_display(factor: float | None, trades: int | None) -> str:
+    """Format a profit factor, distinguishing "no losses" from "no trades".
+
+    ``build_performance`` returns ``None`` for both, because dividing by zero
+    losses has no answer either way. Rendering both as "no losses in sample"
+    told a reader with an empty book that trades had happened and none had
+    lost. An unmeasured quantity has to read as unmeasured.
+    """
+    if factor is not None:
+        return f"{factor:.2f}"
+    return "n/a - no closed trades" if not trades else "no losses in sample"
+
+
 def performance_panel(data: dict[str, Any]) -> dict[str, Any]:
     """Realised performance by strategy and by regime.
 
@@ -864,9 +877,7 @@ def performance_panel(data: dict[str, Any]) -> dict[str, Any]:
             "net_pnl": source.get("net_pnl"),
             "net_display": _money(source.get("net_pnl"), currency),
             "profit_factor": factor,
-            "profit_factor_display": (
-                "no losses in sample" if factor is None else f"{factor:.2f}"
-            ),
+            "profit_factor_display": _profit_factor_display(factor, source.get("trades")),
             "costs": source.get("costs"),
             "avg_bars_held": source.get("avg_bars_held"),
             "ambiguous_exits": source.get("ambiguous_exits"),
@@ -935,9 +946,9 @@ def performance_panel(data: dict[str, Any]) -> dict[str, Any]:
             _metric(
                 "Profit factor",
                 overall.get("profit_factor"),
-                "no losses in sample"
-                if overall.get("profit_factor") is None
-                else f"{overall['profit_factor']:.2f}",
+                _profit_factor_display(
+                    overall.get("profit_factor"), overall.get("trades")
+                ),
             ),
             _metric(
                 "Net realised",

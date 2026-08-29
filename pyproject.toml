@@ -14,7 +14,10 @@ include = ["app*", "dashboard*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+# The network test is deselected by default so a clean checkout passes offline,
+# which is what tests/conftest.py and the README both promise. A command-line
+# -m wins over this one, so `pytest -m network` still runs it.
+addopts = "-q --strict-markers -m 'not network'"
 markers = [
     "network: test requires internet access (deselect with '-m \"not network\"')",
     "slow: long-running test",

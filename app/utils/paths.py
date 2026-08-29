@@ -38,11 +38,6 @@ def cache_dir() -> Path:
     return data_root() / "cache"
 
 
-def external_dir() -> Path:
-    """Third-party datasets that are not price series (calendars, etc.)."""
-    return data_root() / "external"
-
-
 def reports_dir() -> Path:
     override = os.environ.get("GTP_REPORTS_DIR")
     return Path(override).resolve() if override else PROJECT_ROOT / "reports"
