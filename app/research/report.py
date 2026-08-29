@@ -408,7 +408,24 @@ class ValidationReport:
 
     # ------------------------------------------------------------------ output
 
+    #: Dataclass fields whose serialised key differs from the attribute name.
+    #: Kept explicit so :func:`test_to_dict_carries_every_section_the_report_holds`
+    #: can prove that every field the report holds reaches the dict, rather than
+    #: matching on names and quietly passing when a section is dropped.
+    _DICT_ALIASES = {"variant_rows": "variants"}
+
     def to_dict(self) -> dict[str, Any]:
+        """The machine-readable report.
+
+        Every section the object holds appears here. That is not a stylistic
+        preference: the dashboard and any other consumer read this dict rather
+        than the rendered text, so a section missing from it is a section that
+        does not exist as far as they are concerned. ``robustness``,
+        ``variant_summary`` and ``regime_performance`` were absent for exactly
+        that reason - the text report rendered parameter sensitivity and
+        ``save()`` wrote it to CSV, while the JSON a reader would actually parse
+        carried no trace of it.
+        """
         verdict, reasons = self.verdict()
         return {
             "experiment_id": self.experiment_id,
@@ -439,9 +456,16 @@ class ValidationReport:
                 else None
             ),
             "monte_carlo": self.monte_carlo.to_dict() if self.monte_carlo else None,
+            "robustness": self.robustness.to_dict() if self.robustness else None,
             "correlation": self.correlation.to_dict() if self.correlation else None,
             "overfitting": self.overfitting.to_dict() if self.overfitting else None,
             "variants": self.variant_rows,
+            "variant_summary": self.variant_summary,
+            "regime_performance": (
+                self.regime_performance.to_dict(orient="records")
+                if not self.regime_performance.empty
+                else []
+            ),
             "notes": self.notes,
         }
 
