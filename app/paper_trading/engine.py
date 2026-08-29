@@ -56,6 +56,7 @@ from app.paper_trading.records import (
     serialise_snapshot,
 )
 from app.portfolio.portfolio import Portfolio, PortfolioSnapshot
+from app.research.context import load_research_context
 from app.signals.models import SignalDirection
 from app.signals.selector import RegimePerformanceTracker
 from app.utils.logging import get_logger
@@ -1661,6 +1662,36 @@ class PaperTradingEngine:
             open_positions=len(self.portfolio.positions),
         )
 
+    def research_context(self) -> dict[str, Any]:
+        """What validation says about this instrument, or why nothing does.
+
+        Read from the validation reports on disk rather than recomputed: a study
+        is expensive and its whole value is that it was run *once*, on windows
+        that were split before anything was measured. Re-deriving anything here
+        would be a second, unrecorded analysis.
+
+        A failure to load is reported as an unavailable context, never as an
+        absent one - "no study exists" and "the study could not be read" are
+        different facts and only one of them is fixed by running a study.
+        """
+        try:
+            context = load_research_context(self.symbol, self.timeframe)
+        except Exception as exc:  # noqa: BLE001 - a monitoring page must still render
+            self._record_error(
+                f"The research context could not be loaded ({type(exc).__name__}: {exc}). "
+                "The dashboard shows no validation status rather than a stale one.",
+                node="research",
+            )
+            from app.research.context import ResearchAvailability, ResearchContext
+
+            context = ResearchContext(
+                availability=ResearchAvailability.UNREADABLE,
+                reason=f"Loading the research context raised {type(exc).__name__}: {exc}",
+                symbol=self.symbol,
+                timeframe=self.timeframe,
+            )
+        return context.to_dict()
+
     def dashboard_data(self) -> dict[str, Any]:
         """Everything the dashboard renders, in one JSON-safe payload.
 
@@ -1712,6 +1743,7 @@ class PaperTradingEngine:
             "trades": list(self._state.get("closed_trades") or [])[-20:],
             "equity_curve": self.equity_curve(),
             "performance": self.performance_view(),
+            "research": self.research_context(),
             "graph": graph,
             "system_health": self.system_health(),
             "events": list(self._state.get("recent_events") or [])[-25:],

@@ -76,8 +76,8 @@ def test_page_renders_with_a_live_session(config_dir, monkeypatch):
 
     assert app.title[0].value.startswith("XAUUSD 1D")
     # Market & regime, Strategies & decision, Portfolio, Execution, Performance,
-    # Graph, Activity.
-    assert len(app.tabs) == 7
+    # Research, Graph, Activity.
+    assert len(app.tabs) == 8
     assert len(app.metric) > 20, "the page drew almost no metrics"
     assert app.dataframe, "the page drew no tables"
 

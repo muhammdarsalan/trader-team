@@ -24,6 +24,7 @@ from typing import Any
 import pandas as pd
 
 from app.research.correlation import CorrelationReport
+from app.research.feedback import RecommendationSet
 from app.research.harness import SegmentRun
 from app.research.monte_carlo import MonteCarloReport
 from app.research.overfitting import OverfittingAssessment
@@ -68,6 +69,10 @@ class ValidationReport:
     overfitting: OverfittingAssessment | None = None
     variant_rows: list[dict[str, Any]] = field(default_factory=list)
     variant_summary: str = ""
+    #: What the findings would imply, and what evidence stands behind each.
+    #: Built after every other section, because a recommendation is a reading of
+    #: the others rather than a measurement of its own.
+    recommendations: RecommendationSet | None = None
     regime_performance: pd.DataFrame = field(default_factory=pd.DataFrame)
     spec: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
@@ -174,8 +179,10 @@ class ValidationReport:
             self._monte_carlo_section(),
             self._robustness_section(),
             self._correlation_section(),
+            self._recommendation_section(),
             self._regime_section(),
             self._overfitting_section(),
+            self._evidence_section(),
             self._verdict_section(),
             self._footer(),
         ]
@@ -352,6 +359,11 @@ class ValidationReport:
             block += "\n\n" + self.variant_summary
         return block
 
+    def _recommendation_section(self) -> str:
+        if self.recommendations is None:
+            return ""
+        return self.recommendations.render()
+
     def _regime_section(self) -> str:
         if self.regime_performance is None or self.regime_performance.empty:
             return ""
@@ -372,6 +384,218 @@ class ValidationReport:
         if self.overfitting is None:
             return ""
         return self.overfitting.render().replace("-" * 60, "-" * WIDTH)
+
+    def evidence_summary(self) -> list[dict[str, Any]]:
+        """What has and has not been established, by category.
+
+        The categories are separated because they fail independently and because
+        conflating them is the single most common way a research result gets
+        overstated. "The tests pass" and "the strategy has an edge" are answers
+        to different questions; a reader who sees only a green suite and a
+        verdict line can merge them without noticing, so each category states
+        its own status and its own limitation.
+
+        ``status`` is one of ESTABLISHED, PARTIAL, NOT_ESTABLISHED or
+        NOT_ASSESSED. None of them is ever "proven".
+        """
+        oos = self.out_of_sample
+        rows: list[dict[str, Any]] = []
+
+        # 1. Code. Deliberately first, and deliberately caveated: this is the
+        #    category most likely to be mistaken for the others.
+        rows.append(
+            {
+                "category": "Code and tests",
+                "status": "SEPARATE QUESTION",
+                "detail": (
+                    "Whether the implementation does what it was written to do is "
+                    "established by the test suite, not by this report."
+                ),
+                "limitation": (
+                    "A passing suite on a losing strategy is a correctly implemented "
+                    "losing strategy. Nothing about test results bears on whether an "
+                    "edge exists."
+                ),
+            }
+        )
+
+        # 2. Out-of-sample evidence.
+        if oos is None or oos.metrics.total_trades == 0:
+            oos_status, oos_detail = "NOT_ESTABLISHED", (
+                "The out-of-sample window produced no trades, so nothing was tested "
+                "on unseen data."
+            )
+        elif oos.metrics.total_trades < 30:
+            oos_status, oos_detail = "NOT_ESTABLISHED", (
+                f"{oos.metrics.total_trades} out-of-sample trades. Below roughly 30 the "
+                "sample is too small for the statistics to mean anything."
+            )
+        elif oos.metrics.expectancy_r <= 0:
+            oos_status, oos_detail = "NOT_ESTABLISHED", (
+                f"Out-of-sample expectancy is {oos.metrics.expectancy_r:+.3f}R over "
+                f"{oos.metrics.total_trades} trades. On unseen data this configuration "
+                "lost money per unit of risk."
+            )
+        else:
+            oos_status, oos_detail = "PARTIAL", (
+                f"Out-of-sample expectancy is {oos.metrics.expectancy_r:+.3f}R over "
+                f"{oos.metrics.total_trades} trades, on one window scored once."
+            )
+        rows.append(
+            {
+                "category": "Out-of-sample evidence",
+                "status": oos_status,
+                "detail": oos_detail,
+                "limitation": (
+                    "One window of one instrument. A positive result here is the "
+                    "beginning of evidence, not a conclusion."
+                ),
+            }
+        )
+
+        # 3. Statistical uncertainty.
+        if self.monte_carlo is None:
+            mc_status, mc_detail = "NOT_ASSESSED", "No resampling was run."
+        else:
+            mc_status, mc_detail = "PARTIAL", (
+                "The out-of-sample trade sequence was resampled; the spread of outcomes "
+                "is in the Monte Carlo section."
+            )
+        rows.append(
+            {
+                "category": "Statistical uncertainty",
+                "status": mc_status,
+                "detail": mc_detail,
+                "limitation": (
+                    "Resampling explores orderings of the trades that happened. It "
+                    "cannot produce a trade the strategy never took."
+                ),
+            }
+        )
+
+        # 4. Robustness.
+        if self.robustness is None or not self.robustness.sensitivities:
+            rb_status, rb_detail = "NOT_ASSESSED", "No parameter neighbourhood was swept."
+        elif self.robustness.fragile_parameters:
+            rb_status, rb_detail = "NOT_ESTABLISHED", (
+                "These parameters change the outcome sharply for a small change in "
+                f"value: {', '.join(self.robustness.fragile_parameters)}."
+            )
+        else:
+            rb_status, rb_detail = "PARTIAL", (
+                f"{len(self.robustness.sensitivities)} parameter neighbourhood(s) swept "
+                "and none was fragile."
+            )
+        rows.append(
+            {
+                "category": "Robustness",
+                "status": rb_status,
+                "detail": rb_detail,
+                "limitation": (
+                    "Swept one parameter at a time on the in-sample window. Interactions "
+                    "between parameters are not explored."
+                ),
+            }
+        )
+
+        # 5. Overfitting risk.
+        if self.overfitting is None:
+            of_status, of_detail = "NOT_ASSESSED", "No overfitting diagnostics were run."
+        elif self.overfitting.severe:
+            of_status, of_detail = "NOT_ESTABLISHED", (
+                f"{len(self.overfitting.severe)} severe finding(s): "
+                + "; ".join(f.message for f in self.overfitting.severe)
+            )
+        else:
+            of_status, of_detail = "PARTIAL", (
+                "No severe diagnostic fired for the number of configurations tried."
+            )
+        rows.append(
+            {
+                "category": "Overfitting risk",
+                "status": of_status,
+                "detail": of_detail,
+                "limitation": (
+                    "The trial count covers searches this platform recorded. Choices "
+                    "made before the first study - which strategies exist at all - are "
+                    "not counted and cannot be."
+                ),
+            }
+        )
+
+        # 6. Correlation and redundancy.
+        if self.correlation is None:
+            corr_status, corr_detail = "NOT_ASSESSED", "Correlation was not measured."
+        elif self.correlation.findings:
+            corr_status, corr_detail = "PARTIAL", (
+                f"{len(self.correlation.findings)} redundancy hypothesis(es) raised: "
+                + "; ".join(str(f) for f in self.correlation.findings)
+            )
+        else:
+            corr_status, corr_detail = "PARTIAL", (
+                "No strategy pair exceeded the correlation threshold on this window."
+            )
+        rows.append(
+            {
+                "category": "Correlation and redundancy",
+                "status": corr_status,
+                "detail": corr_detail,
+                "limitation": (
+                    "Measured on one window. No strategy is disabled on the strength of "
+                    "a correlation; candidates are tested instead."
+                ),
+            }
+        )
+
+        # 7. Data quality.
+        degraded = self.degraded_segments
+        rows.append(
+            {
+                "category": "Data quality",
+                "status": "NOT_ESTABLISHED" if degraded else "PARTIAL",
+                "detail": (
+                    f"Windows that ran on less than clean data: {', '.join(degraded)}."
+                    if degraded
+                    else f"Every window graded clean. Series grade: {self.data_quality}."
+                ),
+                "limitation": (
+                    "The feed is a free vendor series. Where the instrument is a proxy "
+                    "for something else, the proxy's tracking error is not modelled."
+                ),
+            }
+        )
+
+        # 8. Execution assumptions.
+        rows.append(
+            {
+                "category": "Execution assumptions",
+                "status": "NOT_ESTABLISHED",
+                "detail": (
+                    "Fills are simulated: next-bar open, configured spread, modelled "
+                    "slippage, commission. No order in this study met a real venue."
+                ),
+                "limitation": (
+                    "Spread comes from configuration, not from quotes. On a real venue "
+                    "it widens exactly when it matters most, and no result here reflects "
+                    "that."
+                ),
+            }
+        )
+        return rows
+
+    def _evidence_section(self) -> str:
+        lines = ["-" * WIDTH, "WHAT HAS AND HAS NOT BEEN ESTABLISHED", "-" * WIDTH]
+        lines.append(
+            "  These fail independently. Merging them is the most common way a research"
+        )
+        lines.append("  result gets overstated, so each is stated separately.")
+        lines.append("")
+        for row in self.evidence_summary():
+            lines.append(f"  {row['category']}: {row['status']}")
+            lines.append(f"    {row['detail']}")
+            lines.append(f"    limitation: {row['limitation']}")
+            lines.append("")
+        return "\n".join(lines).rstrip()
 
     def _verdict_section(self) -> str:
         verdict, reasons = self.verdict()
@@ -443,6 +667,7 @@ class ValidationReport:
             "spec": self.spec,
             "verdict": verdict,
             "verdict_reasons": reasons,
+            "evidence_summary": self.evidence_summary(),
             "segments": [s.summary_row() for s in self.segments],
             "walk_forward": (
                 {
@@ -461,6 +686,9 @@ class ValidationReport:
             "overfitting": self.overfitting.to_dict() if self.overfitting else None,
             "variants": self.variant_rows,
             "variant_summary": self.variant_summary,
+            "recommendations": (
+                self.recommendations.to_dict() if self.recommendations else None
+            ),
             "regime_performance": (
                 self.regime_performance.to_dict(orient="records")
                 if not self.regime_performance.empty

@@ -94,3 +94,26 @@ robustness:
     - strategies.strategies.trend_following.params.stop_atr_multiple
     - strategies.strategies.mean_reversion.params.max_adx
     - strategies.strategies.breakout.params.channel_period
+
+# --- Research-to-strategy feedback ---
+# Whether a validated finding may change the running configuration.
+#
+# This ships DISABLED, and that is the point. A research loop that silently
+# retunes the thing it is measuring stops being a measurement: the next study
+# inherits the previous study's conclusion as its starting point, and the
+# evidence that would have contradicted it is never gathered.
+#
+# Turning it on does not make the loop trusting. A recommendation still has to
+# clear the evidence bar below, and one that does not is refused out loud
+# rather than skipped - a silent no-op is indistinguishable from a change that
+# was applied and happened to alter nothing.
+#
+# Nothing here can disable a strategy. A correlation is a hypothesis about
+# redundancy; the most this loop will ever do is reduce a standing weight, and
+# only on per-fold out-of-sample evidence.
+feedback:
+  enabled: false
+  min_out_of_sample_trades: 30   # the report's own threshold for concluding
+  min_walk_forward_folds: 3      # below this, fold agreement is coincidence
+  require_walk_forward: true     # false accepts a single validation window
+  max_weight_reduction: 0.5      # a larger cut is refused, never clamped

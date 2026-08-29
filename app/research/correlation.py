@@ -326,6 +326,20 @@ def analyse_correlations(
             )
         )
 
+    idle_pairs = [
+        f"{f.strategy_a}/{f.strategy_b}"
+        for f in findings
+        if counts.get(f.strategy_a, 0) == 0 and counts.get(f.strategy_b, 0) == 0
+    ]
+    if idle_pairs:
+        notes.append(
+            f"These flagged pairs opened no positions at all in this window: "
+            f"{', '.join(idle_pairs)}. Their agreement is agreement on inaction - a "
+            "shared WAIT counts as agreement, which is the right reading when two "
+            "strategies wait together most of the time, but at zero trades each there is "
+            "no exposure to reduce and no weight change that could be tested."
+        )
+
     if findings:
         notes.append(
             "These pairings were measured on one window. Redundancy on one sample is not "
