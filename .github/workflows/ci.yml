@@ -1,0 +1,110 @@
+name: CI
+
+# What this gate is for
+# ---------------------
+# The suite is the only mechanical evidence that the platform's safety
+# properties still hold: that features are causal, that the backtest cannot
+# see the future, that a restart changes nothing, that LIVE mode stays
+# refused, and that no surface reports a measurement it does not have. A
+# change that quietly breaks one of those does not look like a failure - it
+# looks like slightly different numbers. This runs the whole suite so that it
+# looks like a red X instead.
+#
+# The default `pytest` selection is deliberate, not a shortcut: `addopts` in
+# pyproject.toml carries `-m 'not network'`, so the run is fully offline and
+# needs no outbound access beyond installing dependencies. Do NOT "speed this
+# up" by passing a marker expression here - a command-line `-m` *replaces*
+# that expression rather than extending it, so `-m "not slow"` would silently
+# select the live Yahoo test back in and fail on a network call. If you ever
+# need a narrower run, spell out `-m "not slow and not network"`.
+
+on:
+  push:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# Superseded runs on the same ref are pointless once a newer commit exists.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: ruff check
+        run: ruff check .
+
+  test:
+    name: pytest (offline)
+    runs-on: ubuntu-latest
+    # The suite is ~12 minutes on a developer machine and the validation
+    # studies dominate it. A two-core runner is slower, so this is generous
+    # on purpose: a timeout here should mean something hung, not that the
+    # studies were merely slow.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Confirm the suite still runs offline
+        # Two assertions, in this order, because either one alone can pass
+        # vacuously. First: a network-marked test must exist - if it were
+        # deleted or lost its marker, the second check would be guarding
+        # nothing. Second: the default selection must not contain it. If the
+        # `-m 'not network'` guard in pyproject addopts is ever dropped, CI
+        # starts failing whenever Yahoo is unreachable, and the cause looks
+        # like a code defect rather than a config change. Say so here instead.
+        #
+        # Note `--collect-only` without -q: the quiet form prints per-file
+        # counts, not test ids, so grepping it would never match and this
+        # would be a guard that cannot fail.
+        run: |
+          pytest --collect-only -m network > /tmp/net.txt
+          if ! grep -q "test_yahoo_live_fetch" /tmp/net.txt; then
+            echo "::error::No network-marked test collected. It was deleted or"
+            echo "::error::lost its marker, so the offline guarantee below is empty."
+            exit 1
+          fi
+          pytest --collect-only > /tmp/all.txt
+          if grep -q "test_yahoo_live_fetch" /tmp/all.txt; then
+            echo "::error::The default pytest selection includes the live-network"
+            echo "::error::test. The -m 'not network' guard in pyproject.toml's"
+            echo "::error::addopts has been lost, and CI now depends on a vendor"
+            echo "::error::endpoint being reachable."
+            exit 1
+          fi
+          echo "Live test exists, is marked, and stays out of the default run."
+
+      - name: pytest
+        run: pytest
