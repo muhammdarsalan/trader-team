@@ -95,6 +95,28 @@ robustness:
     - strategies.strategies.mean_reversion.params.max_adx
     - strategies.strategies.breakout.params.channel_period
 
+# --- Execution-cost stress ---
+# Does whatever the configuration does at baseline survive paying more to trade?
+#
+# The backtest pays the costs the configuration assumes, and those assumptions
+# are optimistic by construction: a constant spread that never widens into a
+# stop, smooth slippage that never lands in the worst tick. This runs the same
+# fixed configuration over the development window under fixed, declared adverse
+# cost scenarios and reports the degradation.
+#
+# It is NOT a search. The scenarios are named and fixed; the baseline is always
+# the headline; an adverse scenario is only ever reported as degradation from
+# it. A multiplier below 1.0 is rejected, because a "stress" that lowers costs
+# is a search for the assumption that flatters the result. Surviving cost stress
+# is never evidence of profitability - only that a modest realistic cost did not
+# destroy an apparent edge on one window.
+cost_stress:
+  enabled: true
+  segment: in_sample            # development window only; never the OOS holdout
+  spread_multipliers: [1.5, 2.0]    # x the configured spread; smallest feeds the combined scenario
+  slippage_multipliers: [1.5, 2.0]  # x the configured slippage
+  commission_pct: 0.0001        # 1bp of notional per fill, where the baseline charges none
+
 # --- Research-to-strategy feedback ---
 # Whether a validated finding may change the running configuration.
 #

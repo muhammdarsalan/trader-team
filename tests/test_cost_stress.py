@@ -30,9 +30,14 @@ from app.research.cost_stress import (
     default_scenarios,
     run_cost_stress_study,
 )
-from app.research.harness import ResearchHarness
+from app.research.harness import ResearchHarness, SegmentRun
+from app.research.report import (
+    VERDICT_INCONCLUSIVE,
+    VERDICT_SURVIVED,
+    ValidationReport,
+)
 from app.research.robustness import set_parameter
-from app.research.splits import chronological_split
+from app.research.splits import Segment, SegmentRole, chronological_split
 
 
 @pytest.fixture
@@ -197,6 +202,71 @@ def test_the_report_serialises_and_round_trips_through_json(config):
     # Must survive a real serialisation, not just dict construction.
     restored = json.loads(json.dumps(payload, default=str))
     assert restored["survival_status"] == "NO_BASELINE_EDGE"
+
+
+# --------------------------------------------------- the verdict gate
+
+def _oos_segment_run(expectancy_r: float, trades: int = 60) -> SegmentRun:
+    index = pd.date_range("2018-01-01", periods=800, freq="1D", tz="UTC")
+    seg = Segment(
+        name="out_of_sample", role=SegmentRole.OUT_OF_SAMPLE,
+        start=300, end=700, data_start=100,
+        start_time=index[300], end_time=index[699],
+    )
+    return SegmentRun(
+        segment=seg, variant="baseline",
+        metrics=PerformanceMetrics(total_trades=trades, expectancy_r=expectancy_r),
+        trades=pd.DataFrame(), equity_curve=pd.Series(dtype="float64"),
+        data_quality="PASS", data_quality_source="test", result=None,  # type: ignore[arg-type]
+    )
+
+
+def _would_survive_report(cost_stress: CostStressReport | None) -> ValidationReport:
+    """A report that reaches SURVIVED on its own, so a downgrade is attributable."""
+    return ValidationReport(
+        experiment_id="RES-cost", symbol="XAUUSD", timeframe="1D",
+        segments=[_oos_segment_run(0.30)],
+        cost_stress=cost_stress,
+    )
+
+
+def test_a_cost_fragile_edge_downgrades_a_would_be_survived_verdict():
+    # Sanity: with no cost stress attached, this report survives.
+    assert _would_survive_report(None).verdict()[0] == VERDICT_SURVIVED
+
+    fragile = _report(
+        _result(BASELINE, expectancy_r=0.15),
+        _result(MODEST_ADVERSE, expectancy_r=-0.03,
+                overrides={"execution.spread_multiplier": 1.5}),
+    )
+    verdict, reasons = _would_survive_report(fragile).verdict()
+    assert verdict == VERDICT_INCONCLUSIVE
+    assert any("realistic" in r.lower() for r in reasons)
+
+
+def test_no_baseline_edge_does_not_downgrade_a_positive_out_of_sample_verdict():
+    """NO_BASELINE_EDGE is not a cost-fragility signal and must not gate the verdict.
+
+    A configuration can lose on the in-sample window yet be positive out of
+    sample; that is unusual but it is the out-of-sample result that carries
+    weight, and 'no in-sample edge' is not evidence the out-of-sample one is an
+    artefact of costs.
+    """
+    no_edge = _report(
+        _result(BASELINE, expectancy_r=-0.10),
+        _result(MODEST_ADVERSE, expectancy_r=-0.20,
+                overrides={"execution.spread_multiplier": 1.5}),
+    )
+    assert _would_survive_report(no_edge).verdict()[0] == VERDICT_SURVIVED
+
+
+def test_a_surviving_cost_stress_leaves_the_verdict_alone():
+    survived = _report(
+        _result(BASELINE, expectancy_r=0.20),
+        _result(MODEST_ADVERSE, expectancy_r=0.12,
+                overrides={"execution.spread_multiplier": 1.5}),
+    )
+    assert _would_survive_report(survived).verdict()[0] == VERDICT_SURVIVED
 
 
 # --------------------------------------------------- the real execution path
