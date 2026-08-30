@@ -75,6 +75,10 @@ class ValidationReport:
     #: Built after every other section, because a recommendation is a reading of
     #: the others rather than a measurement of its own.
     recommendations: RecommendationSet | None = None
+    #: Frozen-holdout status for the out-of-sample window, when a registry is
+    #: attached: the seal, this study's touch number and any over-touch warning.
+    #: ``None`` when the window is protected by convention only.
+    holdout: dict[str, Any] | None = None
     regime_performance: pd.DataFrame = field(default_factory=pd.DataFrame)
     spec: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
@@ -197,6 +201,7 @@ class ValidationReport:
             self._monte_carlo_section(),
             self._robustness_section(),
             self._cost_stress_section(),
+            self._holdout_section(),
             self._correlation_section(),
             self._recommendation_section(),
             self._regime_section(),
@@ -375,6 +380,30 @@ class ValidationReport:
             return ""
         return self.cost_stress.render().replace("-" * 68, "-" * WIDTH)
 
+    def _holdout_section(self) -> str:
+        if not self.holdout:
+            return ""
+        h = self.holdout
+        lines = [
+            "-" * WIDTH,
+            "FROZEN HOLDOUT",
+            "-" * WIDTH,
+            f"  Holdout id:    {h.get('holdout_id')}",
+            f"  Window:        {h.get('window', {}).get('start')} -> "
+            f"{h.get('window', {}).get('end')}  ({h.get('window', {}).get('bars')} bars)",
+            f"  Touch number:  {h.get('touch_number')}  "
+            f"(first touch: {h.get('first_touch')})",
+            f"  Integrity:     {'ok' if h.get('integrity_ok') else 'MISMATCH'}",
+        ]
+        for warning in h.get("warnings") or []:
+            lines.append(f"  ! {warning}")
+        if h.get("first_touch") and h.get("integrity_ok"):
+            lines.append(
+                "  This is the first, integrity-checked look at a sealed window: a genuine "
+                "out-of-sample evaluation."
+            )
+        return "\n".join(lines)
+
     def _correlation_section(self) -> str:
         if self.correlation is None:
             return ""
@@ -473,6 +502,42 @@ class ValidationReport:
                 "limitation": (
                     "One window of one instrument. A positive result here is the "
                     "beginning of evidence, not a conclusion."
+                ),
+            }
+        )
+
+        # 2b. Frozen holdout - qualifies exactly how out-of-sample the window is.
+        if not self.holdout:
+            ho_status, ho_detail = "NOT_ASSESSED", (
+                "No frozen holdout was sealed for this study. The out-of-sample window is "
+                "protected by convention only - nothing recorded whether it had been looked "
+                "at before."
+            )
+        elif not self.holdout.get("integrity_ok", True):
+            ho_status, ho_detail = "NOT_ESTABLISHED", (
+                "The out-of-sample data did not match its seal, so this was not an "
+                "evaluation of the frozen holdout."
+            )
+        elif self.holdout.get("over_touched"):
+            ho_status, ho_detail = "NOT_ESTABLISHED", (
+                f"The holdout has now been evaluated {self.holdout.get('touch_count')} times. "
+                "After the first look it is no longer out of sample; this result should be "
+                "read as in-sample."
+            )
+        else:
+            ho_status, ho_detail = "PARTIAL", (
+                "The out-of-sample window was sealed and this is its first, integrity-checked "
+                "evaluation - a genuine out-of-sample look for this configuration."
+            )
+        rows.append(
+            {
+                "category": "Frozen holdout",
+                "status": ho_status,
+                "detail": ho_detail,
+                "limitation": (
+                    "The ledger records every touch that goes through it; it cannot see a "
+                    "window reconstructed from raw data and backtested without it. It is a "
+                    "ledger, not a sandbox."
                 ),
             }
         )
@@ -727,6 +792,7 @@ class ValidationReport:
             "recommendations": (
                 self.recommendations.to_dict() if self.recommendations else None
             ),
+            "holdout": self.holdout,
             "regime_performance": (
                 self.regime_performance.to_dict(orient="records")
                 if not self.regime_performance.empty

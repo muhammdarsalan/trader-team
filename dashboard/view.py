@@ -1024,6 +1024,7 @@ def research_panel(data: dict[str, Any]) -> dict[str, Any]:
         "monte_carlo": None,
         "robustness": None,
         "cost_stress": None,
+        "holdout": None,
         "correlation": None,
         "overfitting": None,
         "recommendations": [],
@@ -1189,6 +1190,31 @@ def research_panel(data: dict[str, Any]) -> dict[str, Any]:
                 }
                 for s in cost_stress.get("scenarios") or []
             ],
+        }
+
+    holdout = report.get("holdout")
+    if holdout:
+        integrity_ok = bool(holdout.get("integrity_ok"))
+        over_touched = bool(holdout.get("over_touched"))
+        if not integrity_ok:
+            status, tone = "INTEGRITY MISMATCH", "error"
+        elif over_touched:
+            status, tone = "OVER-TOUCHED", "error"
+        elif holdout.get("first_touch"):
+            status, tone = "SEALED, FIRST LOOK", "ok"
+        else:
+            status, tone = "SEALED", "warn"
+        window = holdout.get("window") or {}
+        panel["holdout"] = {
+            "holdout_id": holdout.get("holdout_id"),
+            "status": status,
+            "tone": tone,
+            "touch_count": holdout.get("touch_count"),
+            "touch_number": holdout.get("touch_number"),
+            "window_display": f"{window.get('start')} → {window.get('end')}",
+            "bars": window.get("bars"),
+            "integrity_ok": integrity_ok,
+            "warnings": list(holdout.get("warnings") or []),
         }
 
     correlation = report.get("correlation")

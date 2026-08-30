@@ -77,7 +77,8 @@ The sequence is the design, not a convenience:
 4. Measure strategy correlation and turn any redundancy into candidate
    configurations. Nothing is removed.
 5. Walk forward, choosing between candidates on each fold's training half only.
-6. Run the **out-of-sample** window. Once. Last.
+6. Run the **out-of-sample** window. Once. Last. When a holdout registry is
+   attached, seal it and record the touch.
 7. Resample the out-of-sample trade sequence.
 8. Count how much searching produced all of this, and assess it.
 9. Write the report and record everything.
@@ -254,6 +255,42 @@ cost_stress:
 
 ---
 
+## Frozen holdout
+
+`app/research/holdout.py`. The out-of-sample window carries weight only while it
+stays untouched. The moment a decision is informed by it — a parameter changed
+because the holdout number disappointed, a threshold picked because it improved
+the holdout — it stops being out of sample and becomes the most expensive
+in-sample data there is: the kind everyone still believes is out of sample. The
+registry makes that decay **recorded** instead of trusted.
+
+`HoldoutRegistry` seals a window, fingerprints exactly the bars sealed, and
+keeps a durable SQLite ledger of every sanctioned evaluation, with a running
+touch count. `scripts/run_research.py` attaches one by default (`--no-holdout`
+opts out); the first study to reach the out-of-sample window seals it, and every
+later study that looks at it is recorded as another touch. A first touch reads as
+a genuine out-of-sample look; a second or later touch is flagged, in the report
+and on the dashboard, as development data wearing an out-of-sample label.
+
+**What is technically enforced.** Through the sanctioned door — the study's
+out-of-sample evaluation — every touch is logged and the touch count
+incremented; the sealed window's fingerprint is re-checked against the data
+presented, so a holdout that was edited, re-downloaded or swapped is recorded
+with `integrity_ok = false` rather than silently scored. Separately, before any
+sweep runs, the study asks the registry whether its development windows are
+sealed and **refuses to run** if so, so ordinary optimisation cannot consume the
+holdout. The ledger is a file on disk, so touch counts survive restarts and
+accumulate across sessions.
+
+**What is not, and cannot be.** Nothing here can stop a person from
+reconstructing the same bars from the raw series and backtesting them without
+ever calling the registry. It sees only what comes through its door. It makes
+the correct path easy and records every sanctioned touch — it is a **ledger, not
+a sandbox** — and unlike the disposable experiment store it is governance data
+that must not be deleted.
+
+---
+
 ## Overfitting and data snooping
 
 `app/research/overfitting.py`. The uncomfortable arithmetic: test twenty random
@@ -379,7 +416,7 @@ with it. A single headline number cannot be argued with, only believed or not.
 
 Sections: how to read it · in-sample / validation / out-of-sample · walk-forward
 · drawdown behaviour · Monte Carlo · parameter sensitivity · execution-cost
-stress · strategy correlation and weight variants · performance by market regime
+stress · frozen holdout · strategy correlation and weight variants · performance by market regime
 · overfitting and data snooping · verdict.
 
 Drawdown gets its own section because a return is an outcome while a drawdown is
