@@ -49,6 +49,7 @@ from app.research.experiments import (
 )
 from app.research.feedback import build_recommendations
 from app.research.harness import ResearchHarness, SegmentRun
+from app.research.holdout import HoldoutRegistry, window_fingerprint
 from app.research.monte_carlo import monte_carlo_trade_sequence
 from app.research.objectives import get_objective
 from app.research.overfitting import assess, bar_returns
@@ -91,6 +92,7 @@ class ValidationStudy:
         quality_status: str | None = None,
         store: ExperimentStore | None = None,
         experiment_id: str | None = None,
+        holdout_registry: HoldoutRegistry | None = None,
     ) -> None:
         self.config = config
         self.data = data
@@ -98,6 +100,9 @@ class ValidationStudy:
         self.quality_status = quality_status
         self.settings = config.research
         self.objective = get_objective(self.settings.objective)
+        #: When present, the out-of-sample window is sealed and every touch of
+        #: it recorded. When absent, the window is protected by convention only.
+        self.holdout_registry = holdout_registry
 
         self.harness = ResearchHarness(
             config, data, asset, trading_enabled=True, quality_status=quality_status
@@ -187,6 +192,16 @@ class ValidationStudy:
         validation = self._run_segment(by_name["validation"])
         report.segments.extend([in_sample, validation])
 
+        # Before any sweep or optimisation touches the development windows,
+        # refuse if either has been sealed as a frozen holdout. Optimising a
+        # window that is someone's holdout would consume it silently.
+        if self.holdout_registry is not None:
+            for name in ("in_sample", "validation"):
+                fingerprint = self._window_fingerprint(by_name[name])
+                self.holdout_registry.assert_available_for_development(
+                    fingerprint, purpose=f"validation-study {name} optimisation"
+                )
+
         # --- 3. parameter sensitivity, on in-sample data only ----------------
         if self.settings.robustness.enabled and self.settings.robustness.parameters:
             report.robustness = run_robustness_study(
@@ -238,6 +253,13 @@ class ValidationStudy:
         # --- 6. the out-of-sample window, once --------------------------------
         out_of_sample = self._run_segment(by_name["out_of_sample"])
         report.segments.append(out_of_sample)
+
+        # Seal and record the touch of the frozen holdout, if a registry is
+        # attached. The first study to reach this window seals it; every later
+        # study that looks at it is recorded as another touch, which is the
+        # signal that the out-of-sample result is decaying to in-sample.
+        if self.holdout_registry is not None:
+            report.holdout = self._record_holdout(by_name["out_of_sample"])
 
         # --- the weight variants, on data that did not suggest them -----------
         if candidates and self.settings.test_weight_variants:
@@ -488,6 +510,52 @@ class ValidationStudy:
             )
         except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a study
             logger.warning("Could not record trial", extra={"error": str(exc)})
+
+    def _window_fingerprint(self, segment: Segment) -> str:
+        """Content hash of a segment's scored window, for holdout matching."""
+        return window_fingerprint(self.data.df, segment.start_time, segment.end_time)
+
+    def _record_holdout(self, segment: Segment) -> dict[str, Any]:
+        """Seal the out-of-sample window and record this study's touch of it.
+
+        Returns a serialisable summary for the report: the seal, this study's
+        touch number, whether the data still matches the seal, and any warning
+        that the window has been looked at more than once.
+        """
+        registry = self.holdout_registry
+        assert registry is not None  # guarded by the caller
+        seal = registry.seal(
+            symbol=self.data.symbol,
+            timeframe=self.data.timeframe.code,
+            data=self.data.df,
+            start_time=segment.start_time,
+            end_time=segment.end_time,
+            config_fingerprint=config_fingerprint(self._config_snapshot()),
+            git_revision=self.git_revision,
+            random_seed=self.config.platform.random_seed,
+            label=f"{self.data.symbol} {self.data.timeframe.code} out-of-sample",
+        )
+        access = registry.evaluate(
+            seal,
+            data=self.data.df,
+            experiment_id=self.experiment_id,
+            purpose="validation-study out-of-sample evaluation",
+            config_fingerprint=config_fingerprint(self._config_snapshot()),
+            git_revision=self.git_revision,
+        )
+        status = registry.status_for(seal.holdout_id)
+        return {
+            "holdout_id": seal.holdout_id,
+            "sealed": True,
+            "window": {"start": seal.start_time, "end": seal.end_time, "bars": seal.bars},
+            "data_fingerprint": seal.data_fingerprint,
+            "touch_number": access.touch_number,
+            "touch_count": status.touch_count if status else access.touch_number,
+            "first_touch": access.is_first_touch,
+            "over_touched": (status.over_touched if status else access.touch_number > 1),
+            "integrity_ok": access.integrity_ok,
+            "warnings": list(access.warnings),
+        }
 
     def _total_trials(self) -> int:
         """Distinct configurations ever evaluated against this data.

@@ -209,6 +209,102 @@ def test_seals_and_touch_counts_survive_a_restart(tmp_path, window):
         )
 
 
+@pytest.mark.slow
+def test_the_study_seals_the_holdout_and_records_repeat_looks(tmp_path):
+    """A study given a registry seals its OOS window and flags re-looks honestly."""
+    from app.config.loader import get_config, override_config
+    from app.data.schema import MarketData, coerce_schema
+    from app.research.experiments import ExperimentStore
+    from app.research.study import ValidationStudy
+
+    n = 900
+    rng = np.random.default_rng(11)
+    index = pd.date_range("2016-01-01", periods=n, freq="1D", tz="UTC")
+    close = 500.0 + 0.6 * np.arange(n) + np.cumsum(rng.normal(0, 3.0, n))
+    open_ = np.concatenate([[close[0]], close[:-1]])
+    df = coerce_schema(
+        pd.DataFrame(
+            {"open": open_, "high": np.maximum(open_, close) + 3.0,
+             "low": np.minimum(open_, close) - 3.0, "close": close,
+             "volume": np.full(n, 5_000.0)},
+            index=index,
+        )
+    )
+    data = MarketData(symbol="XAUUSD", timeframe="1D", df=df, provider="synthetic")
+
+    cfg = get_config()
+    r = cfg.research
+    cfg = override_config(cfg, research=r.model_copy(update={
+        "monte_carlo": r.monte_carlo.model_copy(update={"enabled": False}),
+        "walk_forward": r.walk_forward.model_copy(update={"enabled": False}),
+        "robustness": r.robustness.model_copy(update={"enabled": False}),
+        "cost_stress": r.cost_stress.model_copy(update={"enabled": False}),
+        "isolate_strategies": False,
+    }))
+    registry = HoldoutRegistry(tmp_path / "holdout.db")
+    store = ExperimentStore(tmp_path / "e.db")
+
+    first = ValidationStudy(cfg, data, cfg.assets.get("XAUUSD"), quality_status="PASS",
+                            store=store, holdout_registry=registry).run()
+    holdout = first.report.holdout
+    assert holdout is not None
+    assert holdout["touch_number"] == 1
+    assert holdout["first_touch"] is True
+    assert holdout["integrity_ok"] is True
+    assert holdout["over_touched"] is False
+    evidence = {e["category"]: e for e in first.report.evidence_summary()}
+    assert evidence["Frozen holdout"]["status"] == "PARTIAL"
+
+    # Re-running the study looks at the same sealed window again - recorded and
+    # flagged, even though the configuration is identical.
+    second = ValidationStudy(cfg, data, cfg.assets.get("XAUUSD"), quality_status="PASS",
+                             store=store, holdout_registry=registry).run()
+    assert second.report.holdout["over_touched"] is True
+    evidence2 = {e["category"]: e for e in second.report.evidence_summary()}
+    assert evidence2["Frozen holdout"]["status"] == "NOT_ESTABLISHED"
+
+
+@pytest.mark.slow
+def test_a_study_refuses_to_optimise_a_window_sealed_as_holdout(tmp_path):
+    """If a development window is itself sealed, the study must refuse to sweep it."""
+    from app.config.loader import get_config
+    from app.data.schema import MarketData, coerce_schema
+    from app.research.splits import chronological_split
+    from app.research.study import ValidationStudy
+
+    n = 900
+    rng = np.random.default_rng(5)
+    index = pd.date_range("2016-01-01", periods=n, freq="1D", tz="UTC")
+    close = 500.0 + np.cumsum(rng.normal(0, 2.0, n))
+    open_ = np.concatenate([[close[0]], close[:-1]])
+    df = coerce_schema(
+        pd.DataFrame(
+            {"open": open_, "high": np.maximum(open_, close) + 3.0,
+             "low": np.minimum(open_, close) - 3.0, "close": close,
+             "volume": np.full(n, 5_000.0)},
+            index=index,
+        )
+    )
+    data = MarketData(symbol="XAUUSD", timeframe="1D", df=df, provider="synthetic")
+    cfg = get_config()
+
+    registry = HoldoutRegistry(tmp_path / "holdout.db")
+    # Seal the study's in-sample window as if it were a holdout.
+    study = ValidationStudy(cfg, data, cfg.assets.get("XAUUSD"), quality_status="PASS",
+                            holdout_registry=registry)
+    warmup = study.harness.required_warmup()
+    segments = {s.name: s for s in chronological_split(
+        df.index, fractions=tuple(cfg.research.split_fractions),
+        warmup_bars=warmup, embargo_bars=cfg.research.embargo_bars)}
+    in_sample = segments["in_sample"]
+    registry.seal(symbol="XAUUSD", timeframe="1D", data=df,
+                  start_time=in_sample.start_time, end_time=in_sample.end_time,
+                  label="mis-sealed in-sample")
+
+    with pytest.raises(HoldoutViolationError, match="Development must not touch"):
+        study.run()
+
+
 def test_status_summarises_every_seal_for_reporting(registry, window):
     df, start, end = window
     seal = registry.seal(symbol="XAUUSD", timeframe="1D", data=df, start_time=start, end_time=end,
