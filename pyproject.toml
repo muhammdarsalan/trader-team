@@ -14,6 +14,12 @@ include = ["app*", "dashboard*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The repository root, so `app` and `dashboard` import without the project
+# being installed. `python -m pytest` happens to work without this because it
+# puts the working directory on sys.path; the bare `pytest` console script does
+# not, so the command every doc here recommends failed on a clean checkout with
+# ModuleNotFoundError. CI found that on its first run.
+pythonpath = ["."]
 # The network test is deselected by default so a clean checkout passes offline,
 # which is what tests/conftest.py and the README both promise. A command-line
 # -m wins over this one, so `pytest -m network` still runs it.

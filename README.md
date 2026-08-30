@@ -1,5 +1,7 @@
 # Graph-Based Algorithmic Trading Research Platform
 
+[![CI](https://github.com/muhammdarsalan/trader-team/actions/workflows/ci.yml/badge.svg)](https://github.com/muhammdarsalan/trader-team/actions/workflows/ci.yml)
+
 A modular, research-grade platform for developing, backtesting and paper-trading
 systematic strategies, built around a graph/DAG decision architecture.
 
@@ -280,8 +282,15 @@ expression rather than adding to it, which is why the second line spells out
 `not network` again — `pytest -m "not slow"` alone would quietly select the
 live test back in.
 
-The default run takes about 11 minutes, most of it in the `slow` validation
-studies; `-m "not slow and not network"` takes about 4½.
+The default run takes about 10 minutes, most of it in the `slow` validation
+studies; `-m "not slow and not network"` takes about 5½.
+
+Every push and every pull request runs `ruff check .` and the full offline
+suite through [GitHub Actions](.github/workflows/ci.yml). CI adds one check the
+local run does not: it asserts the live-network test still exists, is still
+marked, and is still outside the default selection — so if the `-m 'not
+network'` guard is ever dropped, CI says that rather than failing mysteriously
+the next time the vendor endpoint is down.
 
 Offline tests covering schema contracts, config validation, cleaning,
 resampling, the quality engine, cache integrity, all three providers, the

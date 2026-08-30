@@ -118,6 +118,18 @@ Measured on this commit: the default run takes about **10 minutes** (936 tests),
 most of it in the `slow`-marked validation studies. `-m "not slow and not
 network"` takes about **5½ minutes** (907 tests).
 
+### Continuous integration
+
+`.github/workflows/ci.yml` runs `ruff check .` and the full offline suite on
+every push and every pull request against `master`. It needs no secrets and no
+network beyond installing dependencies.
+
+It also asserts, before running anything, that the live-network test still
+exists, still carries its marker, and is still absent from the default
+selection. That check exists because losing the `-m 'not network'` guard would
+not look like a configuration mistake — it would look like the suite failing
+intermittently for reasons nobody could reproduce locally.
+
 ---
 
 ## Running the platform
