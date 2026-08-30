@@ -1023,6 +1023,7 @@ def research_panel(data: dict[str, Any]) -> dict[str, Any]:
         "walk_forward": None,
         "monte_carlo": None,
         "robustness": None,
+        "cost_stress": None,
         "correlation": None,
         "overfitting": None,
         "recommendations": [],
@@ -1138,6 +1139,55 @@ def research_panel(data: dict[str, Any]) -> dict[str, Any]:
                     "tone": "error" if s.get("fragile") else "ok",
                 }
                 for s in robustness.get("sensitivities") or []
+            ],
+        }
+
+    cost_stress = report.get("cost_stress")
+    if cost_stress:
+        lo, hi = ((cost_stress.get("cost_drag_range") or []) + [None, None])[:2]
+        status = str(cost_stress.get("survival_status") or "NOT_ASSESSED")
+        panel["cost_stress"] = {
+            "measured_on": cost_stress.get("segment"),
+            "survival_status": status,
+            "survives": bool(cost_stress.get("survives")),
+            "survival_detail": cost_stress.get("survival_detail"),
+            # A losing baseline and a fragile edge are both bad news, but only
+            # one of them is "the edge died". Colour them apart, and never green
+            # unless an edge actually held.
+            "tone": {
+                "SURVIVED": "ok",
+                "DID_NOT_SURVIVE": "error",
+                "NO_BASELINE_EDGE": "warn",
+                "NOT_ASSESSED": "warn",
+            }.get(status, "neutral"),
+            "baseline_expectancy_r": cost_stress.get("baseline_expectancy_r"),
+            "baseline_display": (
+                "n/a"
+                if cost_stress.get("baseline_expectancy_r") is None
+                else f"{cost_stress['baseline_expectancy_r']:+.3f}R"
+            ),
+            "cost_drag_range": [lo, hi],
+            "cost_drag_display": (
+                "n/a" if lo is None or hi is None else f"{_pct(lo)} to {_pct(hi)}"
+            ),
+            "rows": [
+                {
+                    "scenario": s.get("scenario"),
+                    "is_baseline": bool(s.get("is_baseline")),
+                    "trades": s.get("trades"),
+                    "expectancy_r": s.get("expectancy_r"),
+                    "expectancy_display": (
+                        "error"
+                        if s.get("error")
+                        else "n/a"
+                        if s.get("expectancy_r") is None
+                        else f"{s['expectancy_r']:+.3f}R"
+                    ),
+                    "return_display": _pct(s.get("total_return")),
+                    "cost_drag_display": _pct(s.get("cost_drag")),
+                    "error": s.get("error"),
+                }
+                for s in cost_stress.get("scenarios") or []
             ],
         }
 

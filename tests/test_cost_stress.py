@@ -269,6 +269,46 @@ def test_a_surviving_cost_stress_leaves_the_verdict_alone():
     assert _would_survive_report(survived).verdict()[0] == VERDICT_SURVIVED
 
 
+# ------------------------------------------------------- the dashboard view
+
+def test_the_dashboard_panel_surfaces_cost_stress_without_fabrication():
+    """The research panel must show the cost result when present, and only then."""
+    from dashboard.view import research_panel
+
+    report = _report(
+        _result(BASELINE, expectancy_r=-0.35),
+        _result(MODEST_ADVERSE, expectancy_r=-0.38,
+                overrides={"execution.spread_multiplier": 1.5}),
+    )
+    ctx = {"availability": "AVAILABLE", "report": {
+        "evidence_summary": [], "segments": [], "cost_stress": report.to_dict()}}
+    panel = research_panel({"research": ctx})["cost_stress"]
+
+    assert panel is not None
+    assert panel["survival_status"] == "NO_BASELINE_EDGE"
+    assert panel["tone"] == "warn"          # not green - no edge held
+    assert panel["baseline_display"] == "-0.350R"
+    assert [r["scenario"] for r in panel["rows"]] == [BASELINE, MODEST_ADVERSE]
+
+    # A survived result is the only one that may read green.
+    survived = _report(
+        _result(BASELINE, expectancy_r=0.2),
+        _result(MODEST_ADVERSE, expectancy_r=0.1,
+                overrides={"execution.spread_multiplier": 1.5}),
+    )
+    ctx["report"]["cost_stress"] = survived.to_dict()
+    assert research_panel({"research": ctx})["cost_stress"]["tone"] == "ok"
+
+
+def test_the_dashboard_panel_shows_nothing_when_there_is_no_cost_study():
+    """No cost study must render as absent, never as a table of zeros."""
+    from dashboard.view import research_panel
+
+    ctx = {"availability": "AVAILABLE",
+           "report": {"evidence_summary": [], "segments": []}}
+    assert research_panel({"research": ctx})["cost_stress"] is None
+
+
 # --------------------------------------------------- the real execution path
 
 

@@ -578,6 +578,40 @@ def render_research(view: dict[str, Any]) -> None:
     else:
         st.caption("No parameter sensitivity sweep is recorded for this study.")
 
+    cost_stress = research["cost_stress"]
+    if cost_stress:
+        st.markdown("**Execution-cost stress**")
+        st.caption(
+            f"Same configuration on the {cost_stress['measured_on']} window under fixed, "
+            "declared adverse cost scenarios. The baseline is the headline; adverse "
+            "scenarios are only ever degradation from it. Surviving cost stress is not "
+            "evidence of profitability."
+        )
+        cols = st.columns(3)
+        cols[0].metric("Baseline expectancy", cost_stress["baseline_display"])
+        cols[1].metric("Cost drag range", cost_stress["cost_drag_display"])
+        cols[2].metric("Survival", cost_stress["survival_status"])
+        detail = cost_stress["survival_detail"]
+        tone = cost_stress["tone"]
+        if tone == "error":
+            st.error(detail)
+        elif tone == "ok":
+            st.success(detail)
+        else:
+            st.warning(detail)
+        _table(
+            cost_stress["rows"],
+            [
+                ("scenario", "Scenario"),
+                ("trades", "Trades"),
+                ("return_display", "Return"),
+                ("expectancy_display", "Expectancy"),
+                ("cost_drag_display", "Cost drag"),
+            ],
+        )
+    else:
+        st.caption("No execution-cost stress study is recorded for this study.")
+
     correlation = research["correlation"]
     if correlation:
         st.markdown("**Strategy correlation and redundancy**")

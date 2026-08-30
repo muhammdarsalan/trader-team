@@ -73,6 +73,7 @@ The sequence is the design, not a convenience:
 2. Run the baseline on **in-sample** and **validation**.
 3. Sweep parameter neighbourhoods — on the in-sample window, because a sweep is
    a search and a search consumes whatever it touches.
+3b. Stress execution costs — on the in-sample window, for the same reason.
 4. Measure strategy correlation and turn any redundancy into candidate
    configurations. Nothing is removed.
 5. Walk forward, choosing between candidates on each fold's training half only.
@@ -207,6 +208,52 @@ robustness:
 
 ---
 
+## Execution-cost stress
+
+`app/research/cost_stress.py`. Every backtest pays the costs the configuration
+assumes, and those assumptions are optimistic by construction: a constant spread
+that never widens into a stop, smooth slippage that never lands in the worst
+tick of a fast move. A result that only holds at the assumed costs is describing
+the assumption. So this asks one question: **does whatever the configuration
+does at baseline survive paying more to trade?**
+
+It runs the *same fixed configuration* over the in-sample window under a handful
+of named, declared cost scenarios — a spread widened to 1.5× and 2×, slippage
+the same, a commission where the baseline charged none, and the mildest of each
+applied together as the decisive `adverse_combined` case. Each scenario changes
+`execution.*` and nothing else, through the same `set_parameter` re-validation
+and the same backtester and execution simulator a real study uses, so a change
+in the numbers is the change the cost assumption made, computed on real fills.
+
+It is **not a search.** The scenarios are fixed and named; the baseline is
+always the headline; an adverse scenario is only ever reported as degradation
+from it. A multiplier below 1.0 is rejected outright, because a "stress" that
+lowers costs is a search for the assumption that flatters the result. These runs
+are not counted as data-snooping trials, because an adverse-cost scenario is
+never a candidate to ship — every one of them is built to make the result worse.
+
+The survival verdict is deliberately honest about the current strategies. On a
+configuration that already loses money at its own assumed costs the report says
+**NO_BASELINE_EDGE** — there is no edge for costs to remove — rather than
+dressing "no edge" up as "did not survive". When there *is* an apparent
+in-sample edge and modest costs destroy it, that is **DID_NOT_SURVIVE**, and the
+study's verdict is downgraded from *survived this round* to *inconclusive*:
+even the window the configuration was developed on does not keep its edge once
+costs are realistic. Surviving cost stress is never evidence of profitability —
+only that a modest realistic cost did not, on one window, take away whatever was
+there.
+
+```yaml
+cost_stress:
+  enabled: true
+  segment: in_sample            # development window only; never the OOS holdout
+  spread_multipliers: [1.5, 2.0]
+  slippage_multipliers: [1.5, 2.0]
+  commission_pct: 0.0001        # 1bp of notional, where the baseline charges none
+```
+
+---
+
 ## Overfitting and data snooping
 
 `app/research/overfitting.py`. The uncomfortable arithmetic: test twenty random
@@ -331,9 +378,9 @@ point, so `stable_hash` uses SHA-256 over canonical JSON.
 with it. A single headline number cannot be argued with, only believed or not.
 
 Sections: how to read it · in-sample / validation / out-of-sample · walk-forward
-· drawdown behaviour · Monte Carlo · parameter sensitivity · strategy
-correlation and weight variants · performance by market regime · overfitting and
-data snooping · verdict.
+· drawdown behaviour · Monte Carlo · parameter sensitivity · execution-cost
+stress · strategy correlation and weight variants · performance by market regime
+· overfitting and data snooping · verdict.
 
 Drawdown gets its own section because a return is an outcome while a drawdown is
 an experience, and the experience decides whether a system is still being run
