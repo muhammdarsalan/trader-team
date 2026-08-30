@@ -612,6 +612,32 @@ def render_research(view: dict[str, Any]) -> None:
     else:
         st.caption("No execution-cost stress study is recorded for this study.")
 
+    holdout = research["holdout"]
+    if holdout:
+        st.markdown("**Frozen holdout**")
+        st.caption(
+            "The out-of-sample window is sealed and every evaluation of it is recorded. "
+            "The first look is genuine out-of-sample evidence; each later one is development "
+            "data wearing an out-of-sample label."
+        )
+        cols = st.columns(3)
+        cols[0].metric("Status", holdout["status"])
+        cols[1].metric("Times evaluated", holdout["touch_count"])
+        cols[2].metric("Window bars", holdout["bars"])
+        st.caption(f"Holdout `{holdout['holdout_id']}` — {holdout['window_display']}")
+        for warning in holdout["warnings"]:
+            st.error(warning)
+        if not holdout["integrity_ok"]:
+            st.error(
+                "The data presented did not match the seal. This was not an evaluation of "
+                "the frozen holdout."
+            )
+    else:
+        st.caption(
+            "No frozen holdout is recorded for this study. The out-of-sample window is "
+            "protected by convention only."
+        )
+
     correlation = research["correlation"]
     if correlation:
         st.markdown("**Strategy correlation and redundancy**")

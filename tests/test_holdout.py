@@ -305,6 +305,40 @@ def test_a_study_refuses_to_optimise_a_window_sealed_as_holdout(tmp_path):
         study.run()
 
 
+def test_the_dashboard_panel_reflects_holdout_status_honestly():
+    """A first look reads clean; a repeat look reads as a red over-touch."""
+    from dashboard.view import research_panel
+
+    def panel_for(**holdout):
+        ctx = {"availability": "AVAILABLE",
+               "report": {"evidence_summary": [], "segments": [], "holdout": holdout}}
+        return research_panel({"research": ctx})["holdout"]
+
+    window = {"start": "2019-01-01", "end": "2021-12-31", "bars": 390}
+    first = panel_for(holdout_id="HOLD-a", window=window, touch_number=1, touch_count=1,
+                      first_touch=True, over_touched=False, integrity_ok=True, warnings=[])
+    assert first["status"] == "SEALED, FIRST LOOK"
+    assert first["tone"] == "ok"
+
+    repeat = panel_for(holdout_id="HOLD-a", window=window, touch_number=2, touch_count=2,
+                       first_touch=False, over_touched=True, integrity_ok=True,
+                       warnings=["evaluated 2 times"])
+    assert repeat["status"] == "OVER-TOUCHED"
+    assert repeat["tone"] == "error"
+
+    broken = panel_for(holdout_id="HOLD-a", window=window, touch_number=1, touch_count=1,
+                       first_touch=True, over_touched=False, integrity_ok=False, warnings=[])
+    assert broken["status"] == "INTEGRITY MISMATCH"
+    assert broken["tone"] == "error"
+
+    # No holdout attached: the panel must say absent, not invent a green status.
+    absent = research_panel(
+        {"research": {"availability": "AVAILABLE",
+                      "report": {"evidence_summary": [], "segments": []}}}
+    )["holdout"]
+    assert absent is None
+
+
 def test_status_summarises_every_seal_for_reporting(registry, window):
     df, start, end = window
     seal = registry.seal(symbol="XAUUSD", timeframe="1D", data=df, start_time=start, end_time=end,

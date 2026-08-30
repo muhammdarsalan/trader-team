@@ -25,6 +25,7 @@ from app.config.loader import get_config, override_config  # noqa: E402
 from app.data.service import MarketDataService  # noqa: E402
 from app.data.validators.quality import DataQualityError  # noqa: E402
 from app.research.experiments import ExperimentStore  # noqa: E402
+from app.research.holdout import HoldoutRegistry  # noqa: E402
 from app.research.splits import SplitError  # noqa: E402
 from app.research.study import ValidationStudy  # noqa: E402
 from app.utils.logging import setup_logging  # noqa: E402
@@ -54,6 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-store", action="store_true",
                         help="Skip the experiment database. The trial count then covers "
                              "this session only, which understates the search.")
+    parser.add_argument("--no-holdout", action="store_true",
+                        help="Do not seal or record the out-of-sample window as a frozen "
+                             "holdout. The window is then protected by convention only.")
     parser.add_argument("--list-experiments", action="store_true",
                         help="List recorded studies and exit")
     parser.add_argument("--log-level", default="WARNING")
@@ -131,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     store = None if args.no_store else ExperimentStore()
+    holdout_registry = None if args.no_holdout else HoldoutRegistry()
 
     study = ValidationStudy(
         config=config,
@@ -139,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         quality_status=str(requested.quality.status),
         store=store,
         experiment_id=args.experiment_id,
+        holdout_registry=holdout_registry,
     )
 
     try:
