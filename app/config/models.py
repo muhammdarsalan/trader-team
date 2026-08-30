@@ -598,6 +598,50 @@ class RobustnessSettings(StrictModel):
     points: int = Field(default=5, ge=3)
 
 
+class CostStressSettings(StrictModel):
+    """How hard execution costs are pushed in the cost-stress study.
+
+    None of these is a performance dial. They decide how adverse the cost
+    scenarios are, and the scenarios are fixed and declared: the study never
+    selects the cost assumption that makes a result look best. Larger values
+    make the test harder, not the strategy better.
+    """
+
+    enabled: bool = True
+
+    #: Which development window to stress on. Never the out-of-sample window -
+    #: stressing it would consume the one segment whose result carries weight.
+    segment: Literal["in_sample", "validation"] = "in_sample"
+
+    #: Scenarios that scale ``execution.spread_multiplier`` by each factor. The
+    #: smallest also feeds the decisive combined scenario.
+    spread_multipliers: list[float] = Field(default_factory=lambda: [1.5, 2.0])
+
+    #: Scenarios that scale ``execution.slippage_value`` by each factor.
+    slippage_multipliers: list[float] = Field(default_factory=lambda: [1.5, 2.0])
+
+    #: Commission as a fraction of notional per fill, applied where the baseline
+    #: charges none. Zero disables the commission scenario. A multiple of the
+    #: shipped zero would leave commissions untested, so this is an absolute
+    #: floor rather than a multiplier.
+    commission_pct: float = Field(default=0.0001, ge=0, le=0.01)
+
+    @field_validator("spread_multipliers", "slippage_multipliers")
+    @classmethod
+    def _adverse_only(cls, v: list[float]) -> list[float]:
+        # A cost "stress" that makes costs cheaper is not a stress. Allowing a
+        # sub-1.0 multiplier would also let the study quietly find the cost
+        # assumption that flatters the result, which is the thing it exists to
+        # prevent.
+        if any(m < 1.0 for m in v):
+            raise ValueError(
+                f"Cost-stress multipliers must be >= 1.0 (adverse or neutral), got {v}. "
+                "A scenario that lowers costs is a search for a flattering assumption, "
+                "not a stress test."
+            )
+        return v
+
+
 class FeedbackSettings(StrictModel):
     """Whether validated research findings may change the running configuration.
 
@@ -677,6 +721,7 @@ class ResearchConfig(StrictModel):
     walk_forward: WalkForwardSettings = Field(default_factory=WalkForwardSettings)
     monte_carlo: MonteCarloSettings = Field(default_factory=MonteCarloSettings)
     robustness: RobustnessSettings = Field(default_factory=RobustnessSettings)
+    cost_stress: CostStressSettings = Field(default_factory=CostStressSettings)
 
     #: Whether validated findings may feed back into the strategy configuration.
     #: Disabled by default; see :class:`FeedbackSettings`.

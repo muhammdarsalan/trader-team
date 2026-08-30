@@ -39,6 +39,7 @@ from app.research.correlation import (
     variant_row,
     weight_variants,
 )
+from app.research.cost_stress import default_scenarios, run_cost_stress_study
 from app.research.experiments import (
     ExperimentRecord,
     ExperimentStore,
@@ -199,6 +200,21 @@ class ValidationStudy:
                 on_trial=lambda variant, cfg, metrics: self._count_trial(
                     variant, cfg, "in_sample", metrics
                 ),
+            )
+
+        # --- 3b. execution-cost stress, on the development window only --------
+        # Deliberately not passed to _count_trial: an adverse-cost scenario is
+        # never a candidate to ship and is built to make the result worse, so it
+        # is not part of the search the deflated-Sharpe arithmetic guards against.
+        if self.settings.cost_stress.enabled:
+            cs = self.settings.cost_stress
+            stress_segment = by_name.get(cs.segment) or by_name["in_sample"]
+            report.cost_stress = run_cost_stress_study(
+                self.harness,
+                stress_segment,
+                default_scenarios(self.config, cs),
+                objective=self.objective,
+                objective_name=self.settings.objective,
             )
 
         # --- 4. correlation and the variants it suggests ---------------------

@@ -24,6 +24,7 @@ from typing import Any
 import pandas as pd
 
 from app.research.correlation import CorrelationReport
+from app.research.cost_stress import CostStressReport
 from app.research.feedback import RecommendationSet
 from app.research.harness import SegmentRun
 from app.research.monte_carlo import MonteCarloReport
@@ -65,6 +66,7 @@ class ValidationReport:
     walk_forward: WalkForwardReport | None = None
     monte_carlo: MonteCarloReport | None = None
     robustness: RobustnessReport | None = None
+    cost_stress: CostStressReport | None = None
     correlation: CorrelationReport | None = None
     overfitting: OverfittingAssessment | None = None
     variant_rows: list[dict[str, Any]] = field(default_factory=list)
@@ -156,6 +158,22 @@ class ValidationReport:
             )
             return VERDICT_INCONCLUSIVE, reasons
 
+        # A positive out-of-sample result whose development-window edge evaporates
+        # under modest realistic costs is not one to trust: the profitability was
+        # an artefact of optimistic cost assumptions. This only ever downgrades,
+        # and only fires when the development window actually showed an edge that
+        # died - "no edge to begin with" is handled by the expectancy check above,
+        # not here.
+        if self.cost_stress is not None:
+            cost_status, cost_detail = self.cost_stress.survival()
+            if cost_status == "DID_NOT_SURVIVE":
+                reasons.append(cost_detail)
+                reasons.append(
+                    "Measured on the in-sample window; even the window the configuration "
+                    "was developed on does not keep its edge once costs are realistic."
+                )
+                return VERDICT_INCONCLUSIVE, reasons
+
         reasons.append(
             f"Out-of-sample expectancy is {oos.metrics.expectancy_r:+.3f}R over "
             f"{oos.metrics.total_trades} trades, no severe overfitting diagnostic fired, and "
@@ -178,6 +196,7 @@ class ValidationReport:
             self._drawdown_section(),
             self._monte_carlo_section(),
             self._robustness_section(),
+            self._cost_stress_section(),
             self._correlation_section(),
             self._recommendation_section(),
             self._regime_section(),
@@ -350,6 +369,11 @@ class ValidationReport:
         if self.robustness is None:
             return ""
         return self.robustness.render().replace("-" * 60, "-" * WIDTH)
+
+    def _cost_stress_section(self) -> str:
+        if self.cost_stress is None:
+            return ""
+        return self.cost_stress.render().replace("-" * 68, "-" * WIDTH)
 
     def _correlation_section(self) -> str:
         if self.correlation is None:
@@ -566,14 +590,27 @@ class ValidationReport:
         )
 
         # 8. Execution assumptions.
+        ex_status, ex_detail = "NOT_ESTABLISHED", (
+            "Fills are simulated: next-bar open, configured spread, modelled "
+            "slippage, commission. No order in this study met a real venue."
+        )
+        if self.cost_stress is not None:
+            cost_status, cost_detail = self.cost_stress.survival()
+            lo, hi = self.cost_stress.cost_drag_range()
+            drag = f" Cost drag ranged {lo:.2%} to {hi:.2%} across scenarios."
+            if cost_status == "SURVIVED":
+                ex_status, ex_detail = "PARTIAL", (
+                    "An apparent development-window edge held under modest realistic cost "
+                    "stress." + drag + " Fills are still simulated - this is survival of a "
+                    "stress test, not a real-venue result."
+                )
+            elif cost_status in ("DID_NOT_SURVIVE", "NO_BASELINE_EDGE"):
+                ex_status, ex_detail = "NOT_ESTABLISHED", cost_detail + drag
         rows.append(
             {
                 "category": "Execution assumptions",
-                "status": "NOT_ESTABLISHED",
-                "detail": (
-                    "Fills are simulated: next-bar open, configured spread, modelled "
-                    "slippage, commission. No order in this study met a real venue."
-                ),
+                "status": ex_status,
+                "detail": ex_detail,
                 "limitation": (
                     "Spread comes from configuration, not from quotes. On a real venue "
                     "it widens exactly when it matters most, and no result here reflects "
@@ -682,6 +719,7 @@ class ValidationReport:
             ),
             "monte_carlo": self.monte_carlo.to_dict() if self.monte_carlo else None,
             "robustness": self.robustness.to_dict() if self.robustness else None,
+            "cost_stress": self.cost_stress.to_dict() if self.cost_stress else None,
             "correlation": self.correlation.to_dict() if self.correlation else None,
             "overfitting": self.overfitting.to_dict() if self.overfitting else None,
             "variants": self.variant_rows,
@@ -717,6 +755,10 @@ class ValidationReport:
             frame = self.robustness.to_frame()
             if not frame.empty:
                 frame.to_csv(base / "parameter_sensitivity.csv", index=False)
+        if self.cost_stress is not None:
+            cost_frame = self.cost_stress.to_frame()
+            if not cost_frame.empty:
+                cost_frame.to_csv(base / "cost_stress.csv", index=False)
         if self.correlation is not None and not self.correlation.return_correlations.empty:
             self.correlation.return_correlations.to_csv(base / "strategy_correlation.csv")
         if self.variant_rows:
